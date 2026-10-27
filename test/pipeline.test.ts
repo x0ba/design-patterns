@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { Pipeline } from "../src/Pipeline.ts";
 import { Record } from "../src/Record.ts";
@@ -44,5 +47,26 @@ describe("Pipeline.agreement", () => {
     assert.equal(agreement.statusRate, 1);
     assert.equal(agreement.bothPresent, 1);
     assert.equal(agreement.dimRate, 1);
+
+    const summary = Pipeline.summarize({
+      captures: [],
+      records: [
+        { seed: { url: a.url, domain: "docs-education", stratum: "docs" }, slug: "a", record: a, path: "a.json" },
+        { seed: { url: b.url, domain: "docs-education", stratum: "docs" }, slug: "b", record: b, path: "b.json" },
+      ],
+      doubles: [{ slug: "a", a, b, path: "a.b.json", agreement }],
+      failures: [{ url: "https://example.com/fail", stage: "label", error: "boom" }],
+    });
+    assert.equal(summary.records, 2);
+    assert.equal(summary.failures.length, 1);
+    assert.equal(summary.agreement.statusRate, 1);
+    assert.equal(summary.agreement.dimRate, 1);
+    assert.match(Pipeline.formatSummary(summary), /2 records, 1 failures, double 1, status agreement 1.000/);
+
+    const dir = mkdtempSync(join(tmpdir(), "atlas-summary-"));
+    const written = JSON.parse(readFileSync(Pipeline.writeSummary(summary, dir), "utf8")) as {
+      failures: { error: string }[];
+    };
+    assert.equal(written.failures[0]?.error, "boom");
   });
 });

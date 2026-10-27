@@ -46,7 +46,9 @@ This cloud environment installed `cursor-agent` but is **not logged in** and has
 
 ## Output
 
-One PNG + one JSON `UiRecord` per seed URL under `--out` (default `output/`). Capture sidecars (`*.capture.json`) are written so a later `run` can be retried after a capture-only pass.
+One PNG + one JSON `UiRecord` per seed URL under `--out` (default `output/`). Capture sidecars (`*.capture.json`) are written so a later `run` can be retried after a capture-only pass. Each run also writes `summary.json` (failures and double-label agreement).
+
+Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure.
 
 **Git policy:** pilot outputs are **not** committed. JSON is small enough to commit later if wanted; PNGs are full-page and stay out of git. `output/` and `*.png` are in `.gitignore`. The Atlas HTML export is also gitignored (`atlas/*.html`); only `atlas/codebook.json` is committed.
 

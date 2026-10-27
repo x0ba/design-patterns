@@ -50,6 +50,7 @@ class Cli {
       delayMs: flags.delay ? Number(flags.delay) : undefined,
       captureOnly,
       doubleLabel: captureOnly ? 0 : flags.double ? Number(flags.double) : 0,
+      agentTimeoutMs: flags.timeout ? Number(flags.timeout) : undefined,
     });
 
     console.log(
@@ -102,7 +103,12 @@ class Cli {
 Usage:
   tsx src/cli.ts extract <atlas.html> [atlas/codebook.json]
   tsx src/cli.ts capture [--out output] [--limit N] [--url URL] [--delay MS]
-  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N]
+  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS]
+
+Progress is written to stderr as each step finishes. --timeout is the per
+cursor-agent call limit in milliseconds (default 600000 = 10 min); the child
+is killed and the URL is recorded as a label failure. summary.json is written
+to the output directory.
 
 Daniel's local command for the 20-record pilot (+ 5 double-labels):
   tsx src/cli.ts run --out output --double 5
