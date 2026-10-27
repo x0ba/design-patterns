@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# Daniel's Atlas HTML export — extract locally, never commit
+atlas/*.html
+*.html
+
+# Pipeline outputs: JSON records are small but stay local; PNGs are large.
+# Choice: do not commit pilot captures or labels. See README.
+output/
+*.png

@@ -1,0 +1,102 @@
+[
+  {
+    "url": "https://ourworldindata.org/",
+    "domain": "data-viz",
+    "stratum": "data viz"
+  },
+  {
+    "url": "https://observablehq.com/@d3/bar-chart",
+    "domain": "data-viz",
+    "stratum": "data viz"
+  },
+  {
+    "url": "https://play2048.co/",
+    "domain": "games",
+    "stratum": "games"
+  },
+  {
+    "url": "https://lichess.org/",
+    "domain": "games",
+    "stratum": "games"
+  },
+  {
+    "url": "https://todoist.com/",
+    "domain": "productivity",
+    "stratum": "productivity"
+  },
+  {
+    "url": "https://excalidraw.com/",
+    "domain": "productivity",
+    "stratum": "productivity"
+  },
+  {
+    "url": "https://www.theguardian.com/international",
+    "domain": "news-media",
+    "stratum": "news/media"
+  },
+  {
+    "url": "https://www.npr.org/",
+    "domain": "news-media",
+    "stratum": "news/media"
+  },
+  {
+    "url": "https://developer.mozilla.org/en-US/docs/Web",
+    "domain": "docs-education",
+    "stratum": "docs/education"
+  },
+  {
+    "url": "https://react.dev/learn",
+    "domain": "docs-education",
+    "stratum": "docs/education"
+  },
+  {
+    "url": "https://www.ikea.com/us/en/",
+    "domain": "ecommerce",
+    "stratum": "e-commerce browse"
+  },
+  {
+    "url": "https://www.etsy.com/",
+    "domain": "ecommerce",
+    "stratum": "e-commerce browse"
+  },
+  {
+    "url": "https://www.openstreetmap.org/",
+    "domain": "maps",
+    "stratum": "maps"
+  },
+  {
+    "url": "https://news.ycombinator.com/",
+    "domain": "social-community",
+    "stratum": "social/community"
+  },
+  {
+    "url": "https://en.wikipedia.org/wiki/Wikipedia:Community_portal",
+    "domain": "social-community",
+    "stratum": "social/community"
+  },
+  {
+    "url": "https://stripe.com/",
+    "domain": "finance",
+    "stratum": "finance (marketing)"
+  },
+  {
+    "url": "https://www.wealthfront.com/",
+    "domain": "finance",
+    "stratum": "finance (marketing)"
+  },
+  {
+    "url": "https://www.usa.gov/",
+    "domain": "gov-civic",
+    "stratum": "gov/civic"
+  },
+  {
+    "url": "https://www.gov.uk/",
+    "domain": "gov-civic",
+    "stratum": "gov/civic"
+  },
+  {
+    "url": "https://www.awwwards.com/",
+    "domain": "design-portfolios",
+    "stratum": "design portfolios"
+  }
+]
