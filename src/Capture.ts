@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { chromium, type Page } from "playwright";
+import { Output } from "./Output.ts";
 
 export const VIEWPORT_WIDTH = 1440;
 export const CLIP_CSS_PX = 8000;
@@ -78,10 +79,10 @@ export class Capture {
       const clipHeight = await Capture.clipPage(page, clipCssPx);
       const ariaSnapshot = await page.locator("body").ariaSnapshot();
       const buffer = await page.screenshot({
-        path: opts.screenshotPath,
         fullPage: true,
         animations: "disabled",
       });
+      Output.write(opts.screenshotPath, buffer);
 
       const png = Capture.pngSize(buffer);
       const userAgent = String(await page.evaluate("navigator.userAgent"));
@@ -235,8 +236,7 @@ export class Capture {
   }
 
   static writeSidecar(result: CaptureResult, path: string): void {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(
+    Output.write(
       path,
       `${JSON.stringify(
         {

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Atlas, type AtlasCodebook } from "./Atlas.ts";
 import { Capture, CaptureError, DEFAULT_NAV_DELAY_MS, type CaptureResult } from "./Capture.ts";
 import { Labeler, type LabelResult } from "./Labeler.ts";
+import { Output } from "./Output.ts";
 import { Record, type CaptureMeta, type UiRecord } from "./Record.ts";
 
 export type Seed = {
@@ -22,7 +23,9 @@ export type PipelineOptions = {
   captureOnly?: boolean;
   fromCapture?: boolean;
   doubleLabel?: number;
+  resume?: boolean;
   labelerBin?: string;
+  log?: (line: string) => void;
   agentTimeoutMs?: number;
   model?: string;
   concurrency?: number;
@@ -159,7 +162,9 @@ export class Pipeline {
         : Labeler.DEFAULT_TIMEOUT_MS;
     const model = opts.model?.trim() || Labeler.DEFAULT_MODEL;
     const fromCapture = Boolean(opts.fromCapture) && !opts.captureOnly;
+    const resume = Boolean(opts.resume);
     const concurrency = Pipeline.concurrencyOf(opts.concurrency);
+    const log = (line: string) => Pipeline.emit(opts.log, line);
     mkdirSync(opts.outDir, { recursive: true });
 
     let seeds = opts.seeds;
@@ -170,9 +175,14 @@ export class Pipeline {
     if (opts.limit && opts.limit > 0) seeds = seeds.slice(0, opts.limit);
 
     const result: PipelineRunResult = { captures: [], records: [], doubles: [], failures: [] };
-    const mode = opts.captureOnly ? " (capture only)" : fromCapture ? " (from capture)" : "";
-    Pipeline.log(
-      `pipeline: ${seeds.length} url(s)${mode}, model ${model}, agent timeout ${Math.round(timeoutMs / 1000)}s, concurrency ${concurrency}, out ${opts.outDir}`,
+    const mode = [
+      opts.captureOnly ? "capture only" : "",
+      fromCapture ? "from capture" : "",
+      resume ? "resume" : "",
+    ].filter(Boolean);
+    const modeText = mode.length ? ` (${mode.join(", ")})` : "";
+    log(
+      `pipeline: ${seeds.length} url(s)${modeText}, model ${model}, agent timeout ${Math.round(timeoutMs / 1000)}s, concurrency ${concurrency}, out ${opts.outDir}`,
     );
 
     const seenSlugs = new Map<string, string>();
@@ -183,13 +193,30 @@ export class Pipeline {
       try {
         const slug = Pipeline.slug(seed.url);
         Pipeline.claimSlug(seenSlugs, slug, seed.url);
+        const recordPath = join(opts.outDir, `${slug}.json`);
+        const sidecarPath = join(opts.outDir, `${slug}.capture.json`);
         const screenshotPath = join(opts.outDir, `${slug}.png`);
-        const capture = fromCapture
-          ? Pipeline.reuseOne(tag, seed.url, join(opts.outDir, `${slug}.capture.json`))
-          : await Pipeline.captureOne(tag, seed.url, screenshotPath, gate, delayMs);
-        if (!fromCapture) {
-          Capture.writeSidecar(capture, join(opts.outDir, `${slug}.capture.json`));
+        if (resume) {
+          const saved = Pipeline.loadDone(recordPath, codebook, seed.url, true);
+          if (saved) {
+            log(`${tag} skip (done) ${seed.url}`);
+            result.records.push({ seed, slug, record: saved, path: recordPath });
+            const existing = Pipeline.tryReuse(sidecarPath, seed.url);
+            if (existing) result.captures.push({ seed, slug, capture: existing });
+            return;
+          }
         }
+        const capture = await Pipeline.acquireCapture(
+          tag,
+          seed.url,
+          sidecarPath,
+          screenshotPath,
+          fromCapture,
+          resume,
+          gate,
+          delayMs,
+          log,
+        );
         captured = true;
         result.captures.push({ seed, slug, capture });
         if (opts.captureOnly) return;
@@ -201,14 +228,14 @@ export class Pipeline {
           opts,
           timeoutMs,
           model,
-          (line) => Pipeline.log(`${tag} ${line}`),
+          (line) => log(`${tag} ${line}`),
         );
         result.records.push(labeled);
-        Pipeline.log(`${tag} wrote ${labeled.path}`);
+        log(`${tag} wrote ${labeled.path}`);
       } catch (error) {
         const stage = captured ? "label" : "capture";
         for (const line of Labeler.issueLines(error)) {
-          Pipeline.log(`FAIL ${tag} ${stage}: ${line}`);
+          log(`FAIL ${tag} ${stage}: ${line}`);
         }
         result.failures.push({
           url: seed.url,
@@ -228,16 +255,35 @@ export class Pipeline {
       await Pipeline.runPool(targets, concurrency, async (first, d) => {
         const tag = `double [${d + 1}/${targets.length}]`;
         try {
-          const capture = result.captures.find((item) => item.slug === first.slug)!.capture;
+          const bPath = join(opts.outDir, `${first.slug}.b.json`);
+          if (resume) {
+            const savedB = Pipeline.loadDone(bPath, codebook, first.seed.url, false);
+            if (savedB) {
+              const agreement = Pipeline.agreement(first.record, savedB);
+              result.doubles.push({
+                slug: first.slug,
+                a: first.record,
+                b: savedB,
+                path: bPath,
+                agreement,
+              });
+              log(`${tag} skip (done) ${first.seed.url}`);
+              return;
+            }
+          }
+          const found = result.captures.find((item) => item.slug === first.slug);
+          if (!found) {
+            throw new CaptureError(`No saved capture for ${first.seed.url}`);
+          }
           const second = await Pipeline.labelOne(
             codebook,
             first.seed,
             first.slug,
-            capture,
+            found.capture,
             opts,
             timeoutMs,
             model,
-            (line) => Pipeline.log(`${tag} ${line}`),
+            (line) => log(`${tag} ${line}`),
             ".b",
           );
           const agreement = Pipeline.agreement(first.record, second.record);
@@ -249,10 +295,10 @@ export class Pipeline {
             agreement,
           });
           const dims = agreement.dimRate == null ? "n/a" : agreement.dimRate.toFixed(3);
-          Pipeline.log(`${tag} agreement status ${agreement.statusRate.toFixed(3)} dims ${dims}`);
+          log(`${tag} agreement status ${agreement.statusRate.toFixed(3)} dims ${dims}`);
         } catch (error) {
           for (const line of Labeler.issueLines(error)) {
-            Pipeline.log(`FAIL ${tag}: ${line}`);
+            log(`FAIL ${tag}: ${line}`);
           }
           result.failures.push({
             url: first.seed.url,
@@ -263,10 +309,10 @@ export class Pipeline {
       });
     }
 
-    const summary = Pipeline.summarize(result, model);
+    const summary = Pipeline.summarizeDisk(opts.outDir, codebook, result.failures, model);
     const summaryPath = Pipeline.writeSummary(summary, opts.outDir);
-    Pipeline.log(Pipeline.formatSummary(summary));
-    Pipeline.log(`wrote ${summaryPath}`);
+    log(Pipeline.formatSummary(summary));
+    log(`wrote ${summaryPath}`);
     return result;
   }
 
@@ -306,10 +352,77 @@ export class Pipeline {
     };
   }
 
+  static summarizeDisk(
+    outDir: string,
+    codebook: AtlasCodebook,
+    failures: PipelineRunResult["failures"],
+    model = Labeler.DEFAULT_MODEL,
+  ): RunSummary {
+    const names = readdirSync(outDir);
+    const captures: PipelineRunResult["captures"] = [];
+    const records: PipelineRunResult["records"] = [];
+    const bySlug = new Map<string, PipelineRunResult["records"][number]>();
+    for (const name of names) {
+      if (Pipeline.ignoredOutput(name) || name === "summary.json") continue;
+      const path = join(outDir, name);
+      if (name.endsWith(".capture.json")) {
+        try {
+          const capture = Capture.readSidecar(path);
+          captures.push({
+            seed: { url: capture.url, domain: "", stratum: "" },
+            slug: name.slice(0, -".capture.json".length),
+            capture,
+          });
+        } catch {
+          // A partial sidecar is not counted.
+        }
+        continue;
+      }
+      if (name.endsWith(".b.json") || !name.endsWith(".json")) continue;
+      try {
+        const record = Record.readSaved(path, codebook, { fillAbsent: true });
+        const slug = name.slice(0, -".json".length);
+        const item = {
+          seed: { url: record.url, domain: record.domain, stratum: record.domain },
+          slug,
+          record,
+          path,
+        };
+        records.push(item);
+        bySlug.set(slug, item);
+      } catch {
+        // An invalid primary is left for this run to redo; it is not a summary record.
+      }
+    }
+    const doubles: PipelineRunResult["doubles"] = [];
+    for (const name of names) {
+      if (Pipeline.ignoredOutput(name) || !name.endsWith(".b.json")) continue;
+      const slug = name.slice(0, -".b.json".length);
+      const primary = bySlug.get(slug);
+      if (!primary) continue;
+      const path = join(outDir, name);
+      try {
+        const second = Record.readSaved(path, codebook, { fillAbsent: false });
+        if (second.url !== primary.record.url) continue;
+        doubles.push({
+          slug,
+          a: primary.record,
+          b: second,
+          path,
+          agreement: Pipeline.agreement(primary.record, second),
+        });
+      } catch {
+        // An invalid double-label file is omitted.
+      }
+    }
+    records.sort((a, b) => a.slug.localeCompare(b.slug));
+    doubles.sort((a, b) => a.slug.localeCompare(b.slug));
+    return Pipeline.summarize({ captures, records, doubles, failures }, model);
+  }
+
   static writeSummary(summary: RunSummary, outDir: string): string {
-    mkdirSync(outDir, { recursive: true });
     const path = join(outDir, "summary.json");
-    writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`);
+    Output.write(path, `${JSON.stringify(summary, null, 2)}\n`);
     return path;
   }
 
@@ -359,13 +472,67 @@ export class Pipeline {
     };
   }
 
-  private static reuseOne(tag: string, url: string, sidecarPath: string): CaptureResult {
-    Pipeline.log(`${tag} reuse ${url}`);
+  private static loadDone(
+    path: string,
+    codebook: AtlasCodebook,
+    url: string,
+    fillAbsent: boolean,
+  ): UiRecord | undefined {
+    if (!existsSync(path)) return undefined;
+    try {
+      const record = Record.readSaved(path, codebook, { fillAbsent });
+      return record.url === url ? record : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private static tryReuse(sidecarPath: string, url: string): CaptureResult | undefined {
+    try {
+      const capture = Capture.readSidecar(sidecarPath);
+      return capture.url === url ? capture : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private static async acquireCapture(
+    tag: string,
+    url: string,
+    sidecarPath: string,
+    screenshotPath: string,
+    fromCapture: boolean,
+    resume: boolean,
+    gate: { enter(host: string, delayMs: number): Promise<() => void> },
+    delayMs: number,
+    log: (line: string) => void,
+  ): Promise<CaptureResult> {
+    if (resume || fromCapture) {
+      const existing = Pipeline.tryReuse(sidecarPath, url);
+      if (existing) {
+        log(`${tag} reuse ${url}`);
+        log(`${tag} reuse ${url} ok`);
+        return existing;
+      }
+      if (fromCapture) return Pipeline.reuseOne(tag, url, sidecarPath, log);
+    }
+    const capture = await Pipeline.captureOne(tag, url, screenshotPath, gate, delayMs, log);
+    Capture.writeSidecar(capture, sidecarPath);
+    return capture;
+  }
+
+  private static reuseOne(
+    tag: string,
+    url: string,
+    sidecarPath: string,
+    log: (line: string) => void,
+  ): CaptureResult {
+    log(`${tag} reuse ${url}`);
     const capture = Capture.readSidecar(sidecarPath);
     if (capture.url !== url) {
       throw new CaptureError(`Saved capture URL ${capture.url} does not match seed ${url}`);
     }
-    Pipeline.log(`${tag} reuse ${url} ok`);
+    log(`${tag} reuse ${url} ok`);
     return capture;
   }
 
@@ -375,19 +542,18 @@ export class Pipeline {
     screenshotPath: string,
     gate: { enter(host: string, delayMs: number): Promise<() => void> },
     delayMs: number,
+    log: (line: string) => void,
   ): Promise<CaptureResult> {
     const host = new URL(url).host;
     const release = await gate.enter(host, delayMs);
     const started = Date.now();
-    Pipeline.log(`${tag} capture ${url}`);
+    log(`${tag} capture ${url}`);
     const stop = Pipeline.pulse(Labeler.WAIT_EVERY_MS, () => {
-      Pipeline.log(
-        `${tag} capture ${url} still running (${Pipeline.formatElapsed(Date.now() - started)})`,
-      );
+      log(`${tag} capture ${url} still running (${Pipeline.formatElapsed(Date.now() - started)})`);
     });
     try {
       const capture = await Capture.fromUrl(url, { screenshotPath });
-      Pipeline.log(`${tag} capture ${url} ok (${Pipeline.formatElapsed(Date.now() - started)})`);
+      log(`${tag} capture ${url} ok (${Pipeline.formatElapsed(Date.now() - started)})`);
       return capture;
     } finally {
       stop();
@@ -443,6 +609,15 @@ export class Pipeline {
       return;
     }
     Record.write(record, path);
+  }
+
+  private static ignoredOutput(name: string): boolean {
+    return name.startsWith(".") || name.endsWith(".tmp");
+  }
+
+  private static emit(log: ((line: string) => void) | undefined, line: string): void {
+    if (log) log(line);
+    else Pipeline.log(line);
   }
 
   private static sameSet(values: Set<string>, other: string[]): boolean {

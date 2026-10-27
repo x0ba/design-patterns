@@ -55,6 +55,7 @@ class Cli {
       agentTimeoutMs: flags.timeout ? Number(flags.timeout) : undefined,
       model: Cli.modelFlag(flags.model),
       concurrency: Cli.concurrencyFlag(flags.concurrency),
+      resume: flags.resume === true,
     });
 
     console.log(
@@ -122,19 +123,23 @@ class Cli {
 
 Usage:
   tsx src/cli.ts extract <atlas.html> [atlas/codebook.json]
-  tsx src/cli.ts capture [--out output] [--limit N] [--url URL] [--delay MS]
-  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS] [--model ID] [--concurrency N] [--from-capture]
+  tsx src/cli.ts capture [--out output] [--limit N] [--url URL] [--delay MS] [--resume]
+  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS] [--model ID] [--concurrency N] [--from-capture] [--resume]
 
 Progress is written to stderr as each step finishes. --timeout is the per
 cursor-agent call limit in milliseconds (default 600000 = 10 min); the child
 is killed and the URL is recorded as a label failure. --model is passed to
 every cursor-agent spawn (default grok-4.7). --concurrency is how many URLs
 are captured and labeled at once (default 4). The delay applies per host, not
-between different hosts. summary.json is written to the output directory and
-includes the model id. --from-capture labels the saved <slug>.png and
-<slug>.capture.json from a previous capture and does not fetch the page again.
-Output names include the query string and a hash of the full URL. A retry logs
-the full validation error, including every zod path.
+between different hosts. summary.json is rebuilt from every valid record and
+double-label file in the output directory, plus failures from this run, and
+includes the model id. --resume skips a <slug>.json or <slug>.b.json that
+still validates (log: skip (done)) and reuses a valid <slug>.capture.json plus
+PNG when the label is missing. Invalid files are redone. --from-capture labels
+the saved capture and does not fetch the page again. Output names include the
+query string and a hash of the full URL. A retry logs the full validation
+error, including every zod path. Output files are written to a temp file in
+the same directory, then renamed.
 
 Daniel's local command for the 20-record pilot (+ 5 double-labels):
   tsx src/cli.ts run --out output --double 5

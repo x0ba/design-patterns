@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { Record, RecordError, type PatternHit } from "../src/Record.ts";
 import { Fixtures } from "./helpers.ts";
@@ -160,5 +163,46 @@ describe("Record.parse / merge", () => {
         ),
       (error: unknown) => error instanceof RecordError && /Invented id: not-a-real-atlas-id/.test(error.message),
     );
+  });
+
+  it("restores omitted absents and still rejects an invented id", () => {
+    const record = Record.merge(
+      {
+        capture: Fixtures.capture(),
+        status: Fixtures.allAbsent(codebook),
+        dims: { hits: [] },
+        model: { name: "test", version: "0" },
+      },
+      codebook,
+    );
+    const dir = mkdtempSync(join(tmpdir(), "atlas-read-"));
+    const path = join(dir, "page.json");
+    try {
+      Record.write(record, path, { omitAbsent: true });
+      const stored = JSON.parse(readFileSync(path, "utf8")) as {
+        patterns: unknown[];
+        components: { role: string; atlasIds: string[] }[];
+      };
+      assert.equal(stored.patterns.length, 0);
+      assert.throws(
+        () => Record.readSaved(path, codebook),
+        (error: unknown) => error instanceof RecordError && /exactly 119/.test(error.message),
+      );
+      const loaded = Record.readSaved(path, codebook, { fillAbsent: true });
+      assert.equal(loaded.patterns.length, 119);
+      assert.ok(
+        loaded.patterns.every((hit) => hit.status === "absent" && hit.confidence === 0),
+      );
+
+      stored.components = [{ role: "widget", atlasIds: ["not-a-real-atlas-id"] }];
+      writeFileSync(path, JSON.stringify(stored));
+      assert.throws(
+        () => Record.readSaved(path, codebook, { fillAbsent: true }),
+        (error: unknown) =>
+          error instanceof RecordError && /Invented id: not-a-real-atlas-id/.test(error.message),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

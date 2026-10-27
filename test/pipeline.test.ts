@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { Capture, type CaptureResult } from "../src/Capture.ts";
+import { Output } from "../src/Output.ts";
 import { Pipeline } from "../src/Pipeline.ts";
-import { Record } from "../src/Record.ts";
+import { Record, type UiRecord } from "../src/Record.ts";
 import { Fixtures } from "./helpers.ts";
 
 const TINY_PNG = Buffer.from(
@@ -493,6 +494,378 @@ process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(${JSO
     } finally {
       hostA.close();
       hostB.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+function listen(): Promise<{ port: number; hits: () => number; close: () => void }> {
+  let hits = 0;
+  const server = createServer((_req, res) => {
+    hits += 1;
+    res.writeHead(503);
+    res.end("unavailable");
+  });
+  return new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("test server did not bind"));
+        return;
+      }
+      resolve({
+        port: address.port,
+        hits: () => hits,
+        close: () => {
+          server.closeAllConnections();
+          server.close();
+        },
+      });
+    });
+  });
+}
+
+function absentRecord(url: string): UiRecord {
+  const codebook = Fixtures.codebook();
+  return Record.merge(
+    {
+      capture: Fixtures.capture({ url, finalUrl: url }),
+      status: Fixtures.allAbsent(codebook),
+      dims: { hits: [] },
+      model: { name: "test", version: "0" },
+    },
+    codebook,
+  );
+}
+
+function writeCapture(dir: string, url: string, title: string): string {
+  const slug = Pipeline.slug(url);
+  const screenshotPath = join(dir, `${slug}.png`);
+  writeFileSync(screenshotPath, TINY_PNG);
+  Capture.writeSidecar(
+    {
+      url,
+      capturedAt: "2026-10-27T00:00:00.000Z",
+      finalUrl: url,
+      status: 200,
+      title,
+      viewport: { width: 1440, height: 900 },
+      screenshotPx: { width: 1, height: 1 },
+      userAgent: "saved-ua",
+      screenshotPath,
+      screenshotRef: `${slug}.png`,
+      ariaSnapshot: "- main: saved page",
+      clipCssPx: 100,
+    },
+    join(dir, `${slug}.capture.json`),
+  );
+  return slug;
+}
+
+function agentScript(dir: string, name: string, body: string): string {
+  const bin = join(dir, name);
+  writeFileSync(bin, body);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+describe("Pipeline.resume", () => {
+  it("skips a valid record and a valid double-label file", async () => {
+    const server = await listen();
+    const dir = mkdtempSync(join(tmpdir(), "atlas-resume-skip-"));
+    const url = `http://127.0.0.1:${server.port}/done`;
+    const slug = Pipeline.slug(url);
+    const codebook = Fixtures.codebook();
+    const record = absentRecord(url);
+    const recordPath = join(dir, `${slug}.json`);
+    const doublePath = join(dir, `${slug}.b.json`);
+    Pipeline.writeRecord(record, recordPath, "");
+    Pipeline.writeRecord(record, doublePath, ".b");
+    const before = readFileSync(recordPath);
+    const beforeB = readFileSync(doublePath);
+    const stamp = join(dir, "called");
+    const bin = agentScript(
+      dir,
+      "fail-agent.mjs",
+      `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(stamp)}, "called");
+process.exit(1);
+`,
+    );
+    const lines: string[] = [];
+    try {
+      const result = await Pipeline.run({
+        seeds: [{ url, domain: "docs-education", stratum: "docs" }],
+        outDir: dir,
+        codebook,
+        resume: true,
+        doubleLabel: 1,
+        delayMs: 0,
+        labelerBin: bin,
+        agentTimeoutMs: 15_000,
+        model: "grok-4.7",
+        log: (line) => lines.push(line),
+      });
+      assert.equal(server.hits(), 0);
+      assert.equal(result.failures.length, 0);
+      assert.equal(result.records.length, 1);
+      assert.equal(result.records[0]!.record.patterns.length, 119);
+      assert.ok(
+        result.records[0]!.record.patterns.every(
+          (hit) => hit.status === "absent" && hit.confidence === 0,
+        ),
+      );
+      assert.equal(result.doubles.length, 1);
+      assert.equal(result.doubles[0]!.agreement.statusN, 119);
+      assert.equal(result.doubles[0]!.agreement.statusRate, 1);
+      assert.equal(readFileSync(recordPath).equals(before), true);
+      assert.equal(readFileSync(doublePath).equals(beforeB), true);
+      assert.equal(
+        lines.filter((line) => line.includes("skip (done)")).length,
+        2,
+      );
+      assert.equal(readdirSync(dir).includes("called"), false);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("redoes a record that fails closed validation and reuses the capture", async () => {
+    const server = await listen();
+    const dir = mkdtempSync(join(tmpdir(), "atlas-resume-corrupt-"));
+    const url = `http://127.0.0.1:${server.port}/corrupt`;
+    const codebook = Fixtures.codebook();
+    const slug = writeCapture(dir, url, "Corrupt page");
+    const recordPath = join(dir, `${slug}.json`);
+    Pipeline.writeRecord(absentRecord(url), recordPath, "");
+    const stored = JSON.parse(readFileSync(recordPath, "utf8")) as {
+      components: { role: string; atlasIds: string[] }[];
+    };
+    stored.components = [{ role: "widget", atlasIds: ["not-a-real-atlas-id"] }];
+    writeFileSync(recordPath, JSON.stringify(stored));
+    const statusPath = join(dir, "status.json");
+    writeFileSync(statusPath, JSON.stringify(Fixtures.allAbsent(codebook)));
+    const stamp = join(dir, "called");
+    const bin = agentScript(
+      dir,
+      "fake-agent.mjs",
+      `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(stamp)}, "called");
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(${JSON.stringify(statusPath)}, "utf8"), model: "grok-4.7" }));
+`,
+    );
+    const lines: string[] = [];
+    try {
+      const result = await Pipeline.run({
+        seeds: [{ url, domain: "docs-education", stratum: "docs" }],
+        outDir: dir,
+        codebook,
+        resume: true,
+        delayMs: 0,
+        labelerBin: bin,
+        agentTimeoutMs: 15_000,
+        model: "grok-4.7",
+        log: (line) => lines.push(line),
+      });
+      assert.equal(server.hits(), 0);
+      assert.equal(result.failures.length, 0);
+      assert.equal(readdirSync(dir).includes("called"), true);
+      assert.equal(lines.some((line) => line.includes("skip (done)")), false);
+      assert.equal(lines.some((line) => line.includes(`reuse ${url}`)), true);
+      const loaded = Record.readSaved(recordPath, codebook, { fillAbsent: true });
+      assert.equal(loaded.patterns.length, 119);
+      assert.equal(loaded.components.length, 0);
+      assert.equal(loaded.capture.title, "Corrupt page");
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses a valid capture when the label file is missing", async () => {
+    const server = await listen();
+    const dir = mkdtempSync(join(tmpdir(), "atlas-resume-capture-"));
+    const url = `http://127.0.0.1:${server.port}/unlabeled`;
+    const codebook = Fixtures.codebook();
+    const slug = writeCapture(dir, url, "Page A");
+    const statusPath = join(dir, "status.json");
+    writeFileSync(statusPath, JSON.stringify(Fixtures.allAbsent(codebook)));
+    const bin = agentScript(
+      dir,
+      "fake-agent.mjs",
+      `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(${JSON.stringify(statusPath)}, "utf8"), model: "grok-4.7" }));
+`,
+    );
+    const lines: string[] = [];
+    try {
+      const result = await Pipeline.run({
+        seeds: [{ url, domain: "docs-education", stratum: "docs" }],
+        outDir: dir,
+        codebook,
+        resume: true,
+        delayMs: 0,
+        labelerBin: bin,
+        agentTimeoutMs: 15_000,
+        model: "grok-4.7",
+        log: (line) => lines.push(line),
+      });
+      assert.equal(server.hits(), 0);
+      assert.equal(result.failures.length, 0);
+      assert.equal(result.records.length, 1);
+      assert.equal(result.records[0]!.record.capture.title, "Page A");
+      assert.equal(lines.some((line) => line.includes("skip (done)")), false);
+      assert.equal(lines.some((line) => line.includes(`reuse ${url} ok`)), true);
+      assert.equal(readdirSync(dir).includes(`${slug}.json`), true);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("builds summary.json from the whole directory across two runs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "atlas-resume-summary-"));
+    const codebook = Fixtures.codebook();
+    const urlA = "https://summary-a.example/page";
+    const urlB = "https://summary-b.example/page";
+    const missing = "https://summary-missing.example/page";
+    writeCapture(dir, urlA, "A");
+    writeCapture(dir, urlB, "B");
+    const statusPath = join(dir, "status.json");
+    writeFileSync(statusPath, JSON.stringify(Fixtures.allAbsent(codebook)));
+    const bin = agentScript(
+      dir,
+      "fake-agent.mjs",
+      `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(${JSON.stringify(statusPath)}, "utf8"), model: "grok-4.7" }));
+`,
+    );
+    const seeds = [urlA, urlB].map((url) => ({
+      url,
+      domain: "docs-education",
+      stratum: "docs",
+    }));
+    try {
+      const first = await Pipeline.run({
+        seeds,
+        outDir: dir,
+        codebook,
+        fromCapture: true,
+        doubleLabel: 1,
+        delayMs: 0,
+        concurrency: 1,
+        labelerBin: bin,
+        agentTimeoutMs: 15_000,
+        model: "grok-4.7",
+      });
+      assert.equal(first.failures.length, 0);
+      assert.equal(first.records.length, 2);
+      assert.equal(first.doubles.length, 1);
+      const primaryA = readFileSync(join(dir, `${Pipeline.slug(urlA)}.json`));
+      const primaryB = readFileSync(join(dir, `${Pipeline.slug(urlB)}.json`));
+      const doubleA = readFileSync(join(dir, `${Pipeline.slug(urlA)}.b.json`));
+      writeFileSync(
+        join(dir, "summary.json"),
+        `${JSON.stringify({ failures: [{ url: "https://old.example/wipe", stage: "label", error: "stale" }] })}\n`,
+      );
+
+      const second = await Pipeline.run({
+        seeds: [
+          ...seeds,
+          { url: missing, domain: "docs-education", stratum: "docs" },
+        ],
+        only: [urlB, missing],
+        outDir: dir,
+        codebook,
+        resume: true,
+        fromCapture: true,
+        doubleLabel: 0,
+        delayMs: 0,
+        concurrency: 1,
+        labelerBin: bin,
+        agentTimeoutMs: 15_000,
+        model: "grok-4.7",
+      });
+      assert.equal(second.failures.length, 1);
+      assert.equal(second.failures[0]!.url, missing);
+      assert.equal(second.records.length, 1);
+      assert.equal(second.records[0]!.seed.url, urlB);
+      assert.equal(readFileSync(join(dir, `${Pipeline.slug(urlA)}.json`)).equals(primaryA), true);
+      assert.equal(readFileSync(join(dir, `${Pipeline.slug(urlB)}.json`)).equals(primaryB), true);
+      assert.equal(readFileSync(join(dir, `${Pipeline.slug(urlA)}.b.json`)).equals(doubleA), true);
+
+      const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8")) as {
+        records: number;
+        captures: number;
+        failures: { url: string }[];
+        doubles: { slug: string; agreement: { statusRate: number } }[];
+        model: string;
+      };
+      assert.equal(summary.records, 2);
+      assert.equal(summary.captures, 2);
+      assert.equal(summary.doubles.length, 1);
+      assert.equal(summary.doubles[0]!.slug, Pipeline.slug(urlA));
+      assert.equal(summary.doubles[0]!.agreement.statusRate, 1);
+      assert.equal(summary.failures.length, 1);
+      assert.equal(summary.failures[0]!.url, missing);
+      assert.equal(summary.model, "grok-4.7");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Output.write", () => {
+  it("replaces the destination and leaves no temp files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "atlas-atomic-"));
+    try {
+      const png = join(dir, "page.png");
+      const recordPath = join(dir, "page.json");
+      const sidecar = join(dir, "page.capture.json");
+      Output.write(png, TINY_PNG);
+      Output.write(join(dir, "note.txt"), "ok\n");
+      const record = absentRecord("https://example.com/");
+      Record.write(record, recordPath, { omitAbsent: true });
+      Capture.writeSidecar(
+        {
+          url: "https://example.com/saved",
+          capturedAt: "2026-10-27T00:00:00.000Z",
+          finalUrl: "https://example.com/saved",
+          status: 200,
+          title: "Saved",
+          viewport: { width: 1440, height: 900 },
+          screenshotPx: { width: 1, height: 1 },
+          userAgent: "saved-ua",
+          screenshotPath: png,
+          screenshotRef: "page.png",
+          ariaSnapshot: "- main: saved",
+          clipCssPx: 100,
+        },
+        sidecar,
+      );
+      const summary = Pipeline.summarize({
+        captures: [],
+        records: [],
+        doubles: [],
+        failures: [],
+      });
+      Pipeline.writeSummary(summary, dir);
+      const names = readdirSync(dir);
+      assert.equal(
+        names.some((name) => name.startsWith(".") || name.endsWith(".tmp")),
+        false,
+      );
+      assert.equal(readFileSync(png).equals(TINY_PNG), true);
+      assert.equal(readFileSync(join(dir, "note.txt"), "utf8"), "ok\n");
+      assert.equal(Capture.readSidecar(sidecar).title, "Saved");
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).url, "https://example.com/");
+      assert.equal(JSON.parse(readFileSync(join(dir, "summary.json"), "utf8")).records, 0);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });

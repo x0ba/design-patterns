@@ -1,7 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { Atlas, type AtlasCodebook, type AtlasEntry, type AtlasSub } from "./Atlas.ts";
+import { Output } from "./Output.ts";
 
 const Box = z.object({
   x: z.number(),
@@ -171,6 +171,18 @@ export class Record {
     return parsed;
   }
 
+  // Primary files omit absent hits. Restore each missing codebook id as absent
+  // (confidence 0), then run the same zod parse and assertClosed checks.
+  static readSaved(
+    path: string,
+    codebook: AtlasCodebook,
+    opts?: { fillAbsent?: boolean },
+  ): UiRecord {
+    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (opts?.fillAbsent) Record.fillAbsent(raw, codebook);
+    return Record.parse(raw, codebook);
+  }
+
   static hydrate(id: string, codebook: AtlasCodebook): AtlasEntry {
     const entry = Atlas.byId(codebook).get(id);
     if (!entry) {
@@ -302,8 +314,24 @@ export class Record {
 
   static write(record: UiRecord, path: string, opts?: { omitAbsent?: boolean }): void {
     const body = Record.serializable(record, opts);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
+    Output.write(path, `${JSON.stringify(body, null, 2)}\n`);
+  }
+
+  private static fillAbsent(raw: unknown, codebook: AtlasCodebook): void {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+    const record = raw as { patterns?: unknown };
+    if (!Array.isArray(record.patterns)) return;
+    const ids = new Set<string>();
+    for (const hit of record.patterns) {
+      if (hit && typeof hit === "object" && typeof (hit as { id?: unknown }).id === "string") {
+        ids.add((hit as { id: string }).id);
+      }
+    }
+    for (const id of Atlas.ids(codebook)) {
+      if (!ids.has(id)) {
+        record.patterns.push({ id, status: "absent", confidence: 0 });
+      }
+    }
   }
 
   private static assertClosed(record: UiRecord, codebook: AtlasCodebook): void {

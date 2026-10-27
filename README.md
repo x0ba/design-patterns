@@ -34,8 +34,11 @@ tsx src/cli.ts capture --out output --limit 3
 tsx src/cli.ts run --out output --double 5
 tsx src/cli.ts run --out output --double 5 --model grok-4.7 --concurrency 4
 
-# Capture now, label later. A plain run always captures again.
+# Capture now, label later. A plain run captures again.
 tsx src/cli.ts run --from-capture --out output --double 5
+
+# Continue a partial output directory. Valid records are skipped.
+tsx src/cli.ts run --resume --out output --double 5
 ```
 
 Daniel’s local command for the 20-record pilot plus 5 double-labels:
@@ -49,6 +52,8 @@ npx playwright install chromium
 # confirm the Grok 4.7 id this account can use:
 agent models
 tsx src/cli.ts run --out output --double 5
+# rerun after a stopped batch; finished records are left in place
+tsx src/cli.ts run --resume --out output --double 5
 ```
 
 Every spawn is `cursor-agent -p --output-format json --force --trust --model <id>`. The default id is `grok-4.7`. It was **not** verified against an authenticated `agent models` list: CLI `2026.10.22-27dcf5f` returns `Authentication required` for both `agent models` and `cursor-agent --list-models`, and that build does not embed a model catalog. `grok-4.7` is the cloud-agent id. After `agent login`, Daniel can confirm with `agent models` (or `cursor-agent --list-models`) and override with `--model` if the CLI id differs.
@@ -59,9 +64,13 @@ This cloud environment installed `cursor-agent` but is **not logged in** and has
 
 ## Output
 
-One PNG + one JSON record per seed URL under `--out` (default `output/`). The file stem is the host, path, and query, plus a short hash of the full URL, so `/catalog?variant=A` and `/catalog?variant=B` do not share a PNG, sidecar, or record. A second distinct URL that would reuse an output name is a capture failure and nothing is written. The primary `<slug>.json` is the in-memory `UiRecord` with `absent` patterns omitted at write time (`Record.serializable` / `Record.write(..., { omitAbsent: true })`). Validation still requires all 119 ids before that filter. A codebook id that is not in `patterns` is absent. Double-label files (`<slug>.b.json`) keep the full 119, including absents. Capture sidecars (`*.capture.json`) are unchanged. `summary.json` records failures, double-label agreement, and the model id. Agreement compares the full in-memory records, not the filtered files.
+One PNG + one JSON record per seed URL under `--out` (default `output/`). The file stem is the host, path, and query, plus a short hash of the full URL, so `/catalog?variant=A` and `/catalog?variant=B` do not share a PNG, sidecar, or record. A second distinct URL that would reuse an output name is a capture failure and nothing is written. The primary `<slug>.json` is the in-memory `UiRecord` with `absent` patterns omitted at write time (`Record.serializable` / `Record.write(..., { omitAbsent: true })`). Validation still requires all 119 ids before that filter. A codebook id that is not in `patterns` is absent. Double-label files (`<slug>.b.json`) keep the full 119, including absents. Capture sidecars (`*.capture.json`) are unchanged.
 
-`tsx src/cli.ts capture` writes `<slug>.png` and `<slug>.capture.json`. `tsx src/cli.ts run --from-capture` labels those saved files and does not fetch the page again. A plain `run` always captures again.
+`summary.json` is rebuilt from every valid record and `<slug>.b.json` in the output directory after the run, so a later `--url` or `--limit` pass does not drop earlier seeds. Failures in that file are only from the run that just finished. Agreement compares full records (missing primary ids are read back as absent with confidence 0). The model id is the one from this run.
+
+PNG, capture sidecar, `<slug>.json`, `<slug>.b.json`, and `summary.json` are written to a temporary file in the same directory and renamed into place, so an interrupted run does not leave a half-written output.
+
+`tsx src/cli.ts capture` writes `<slug>.png` and `<slug>.capture.json`. `tsx src/cli.ts run --from-capture` labels those saved files and does not fetch the page again. A plain `run` captures again. `tsx src/cli.ts run --resume` skips a `<slug>.json` that still passes the same zod and closed-codebook checks and logs `skip (done)`. A valid `<slug>.capture.json` plus PNG is reused when the label file is missing or invalid, instead of navigating again. The same skip applies to a valid `<slug>.b.json`: agreement is computed from the two files on disk. Invalid or partial files are redone.
 
 Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Lines keep their `[i/N]` prefix when URLs run together. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure. A validation retry logs every zod path in full (`aesthetics.typography: Required (expected string, received undefined)`) and sends those paths back to the model.
 
@@ -81,7 +90,8 @@ The status prompt sends the slim codebook (ids and definitions, about 30 KB, no 
 src/Atlas.ts      Atlas.load / ids / slim / dimsFor / extractFromHtml
 src/Capture.ts    Capture.fromUrl
 src/Labeler.ts    Labeler.label          // two cursor-agent calls
-src/Record.ts     Record.parse / merge / hydrate / write
+src/Output.ts     Output.write           // temp file, then rename
+src/Record.ts     Record.parse / merge / hydrate / write / readSaved
 src/Pipeline.ts   Pipeline.run           // only composition root
 src/cli.ts
 ```
