@@ -8,13 +8,13 @@
 
 | Piece | Use | Do not build |
 |---|---|---|
-| Browse + wait + screenshot | Playwright `chromium`, `page.goto`, `page.screenshot` | Headless wrapper, screenshot SaaS |
-| Structure for the model | Playwright `locator('body').ariaSnapshot()` + `page.title()` / final URL | Custom DOM parser, vision-only labeling |
+| Browse + wait + screenshot | Playwright `chromium`, `page.goto`, `page.screenshot({ fullPage: true })` | Headless wrapper, screenshot SaaS |
+| Structure for the model | Playwright `locator('body').ariaSnapshot()` on the **same clipped page** + `page.title()` / final URL | Custom DOM parser, vision-only labeling |
 | Structured LLM output | Vercel AI SDK `generateObject` **or** the provider JSON-schema API, validated with **zod** | Hand-rolled prompt parsers |
 | Codebook | One typed JSON/TS file loaded at start | Atlas CMS, vector DB, RAG over pattern essays |
 | Orchestration | `tsx` CLI, JSONL/JSON on disk | Queue, worker farm, Next.js reviewer |
 
-**Smallest pipeline.** `seeds.json` → `Capture.fromUrl` → `Labeler.label(capture, atlas)` → `Record.write`. One viewport, no login, no crawl graph, no interaction beyond first paint + network idle. Fail a URL rather than invent a bypass.
+**Smallest pipeline.** `seeds.json` → `Capture.fromUrl` → `Labeler.label(capture, atlas)` → `Record.write`. One shared scope: viewport **width** 1440, full-page screenshot + aria tree clipped together at **8000 CSS px** (taller pages truncate). No login, no crawl graph, no interaction beyond first paint + network idle. Fail a URL rather than invent a bypass.
 
 ## 2. Atlas ingestion
 
@@ -37,14 +37,17 @@ type Atlas = { version: string; patterns: PatternCode[] };
 
 ## 3. Draft JSON label schema
 
-One object per URL. Evidence is required for every present pattern.
+One object per URL. Evidence is required for every present pattern. Use a **text** quote when the control has visible text or an accessible name; use **visual** (description + screenshot bbox) for text-free games, maps, and layouts.
 
 ```ts
-const Evidence = z.object({
-  quote: z.string(),                    // visible text or accname
-  region: z.enum(["header","nav","main","aside","footer","overlay","unknown"]),
-  locator: z.string().optional(),       // aria / css hint
+const Box = z.object({                  // screenshot pixels
+  x: z.number(), y: z.number(), width: z.number(), height: z.number(),
 });
+
+const Evidence = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("text"), quote: z.string() }),
+  z.object({ kind: z.literal("visual"), description: z.string(), region: Box }),
+]);
 
 const PatternHit = z.object({
   code: z.string(),                     // must be in Atlas
@@ -68,6 +71,7 @@ const UiRecord = z.object({
     status: z.number(),
     title: z.string(),
     viewport: z.object({ width: z.number(), height: z.number() }),
+    screenshotPx: z.object({ width: z.number(), height: z.number() }), // full-page PNG; visual region coords
     userAgent: z.string(),
   }),
   screenshotRef: z.string(),            // data/captures/<id>.png
@@ -98,12 +102,12 @@ Strata (1–2 URLs each for the pilot; meeting examples in italics): *data viz*,
 
 ## 5. Pilot (~20 sites)
 
-Run the pipeline once over ~20 seed URLs, one 1440×900 screenshot + aria tree each. **Quality > count** before the 9 Nov meeting.
+Run the pipeline once over ~20 seed URLs. One shared scope each: `page.screenshot({ fullPage: true })` plus `locator('body').ariaSnapshot()`, both clipped at **8000 CSS px** so labels cannot outrun the PNG. Viewport window is 1440×900; the screenshot may be taller. **Quality > count** before the 9 Nov meeting.
 
-**Spot-check rubric** (human, screenshot + JSON, 5–8 records):
+**Spot-check rubric** (human, full-page screenshot + JSON, 5–8 records):
 
 1. Every `code` exists in the Atlas version on the record.
-2. Evidence is visible on the screenshot (no hallucinated sidebars).
+2. Evidence is on that screenshot: a text `quote` is readable there, or a visual `region` lies inside the PNG (nothing from below the height cap).
 3. Structure/layout matches what a person would name.
 4. Aesthetics are specific, not generic (“blue SaaS”).
 5. Page was public; `finalUrl` is still the intended UI.
@@ -111,7 +115,7 @@ Run the pipeline once over ~20 seed URLs, one 1440×900 screenshot + aria tree e
 
 **Pass bar.** ≥4/6 on each checked record; no invented codes. If the model invents codes or misses obvious chrome (nav, app shell), tighten the codebook prompt before scaling.
 
-**Cost / time (compute, not calendar).** Capture is seconds per URL. One vision call per page: roughly \$0.05–\$0.25 depending on model/image size → **about \$1–\$5** for 20. Wall-clock for an unattended run: **~10–20 minutes**. Human spot-check: **~1–2 hours**. No review app: open PNG + JSON in the editor.
+**Cost / time (compute, not calendar).** Capture is seconds per URL. One vision call per full-page PNG: roughly \$0.05–\$0.40 depending on model/image size → **about \$1–\$8** for 20. Wall-clock for an unattended run: **~10–20 minutes**. Human spot-check: **~1–2 hours**. No review app: open PNG + JSON in the editor.
 
 ## 6. Module structure (small diff)
 
