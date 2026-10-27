@@ -1,6 +1,6 @@
 # UI → Design-Pattern Label Pipeline (v1 plan)
 
-**Goal.** Invert the prior workflow: instead of using the Design Pattern Atlas to *generate* UIs, visit real public UIs and *label* them with the Atlas as a thematic-analysis codebook. Each visit writes one JSON record (components, patterns, structure, aesthetics). Success = a **diverse, high-quality** seed dataset, not a crawler. Informed by the 26 Oct 2026 Design Patterns meeting and the 12 Oct 2026 Bryan/Daniel working session.
+**Goal.** Invert the prior workflow: instead of using the Design Pattern Atlas to *generate* UIs, visit real public UIs and *label* them with the Atlas as a thematic-analysis codebook. Each visit writes one JSON record (components, patterns, structure, aesthetics). Success = a **diverse, high-quality** seed dataset, not a crawler. Informed by the 26 Oct 2026 Design Patterns meeting and the 12 Oct 2026 Brian/Daniel working session.
 
 **Stack.** TypeScript + Node + Playwright. No Next.js/React review UI in v1.
 
@@ -18,7 +18,7 @@
 
 ## 2. Atlas ingestion
 
-Atlas format is unknown and not in this repo. Treat whatever Bryan/Jeremy have as **source**, and compile once into a typed codebook the labeler can constrain against.
+Atlas format is unknown and not in this repo. Treat whatever Brian/Jeremy have as **source**, and compile once into a typed codebook the labeler can constrain against.
 
 ```ts
 type PatternCode = {
@@ -33,7 +33,7 @@ type Atlas = { version: string; patterns: PatternCode[] };
 
 `Atlas.load(path)` reads `atlas/codebook.json` (or a thin adapter if the source is Markdown/CSV). The labeler may only emit `code` values from this list (zod `z.enum` built from the file). Closed coding for v1; unknown-but-seen patterns go in `unmappedNotes`, not new codes.
 
-**Need from Bryan:** (1) the Atlas dump + version; (2) canonical `code` / name / family / definition fields; (3) whether 100+ patterns are all in-scope or a v1 subset; (4) license for the codebook; (5) gold examples if any exist.
+**Need from Brian:** (1) the Atlas dump + version; (2) canonical `code` / name / family / definition fields; (3) whether 100+ patterns are all in-scope or a v1 subset; (4) license for the codebook; (5) gold examples if any exist.
 
 ## 3. Draft JSON label schema
 
@@ -115,7 +115,7 @@ Run the pipeline once over ~20 seed URLs, one 1440×900 screenshot + aria tree e
 
 ## 6. Module structure (small diff)
 
-Prefer **classes with static methods**; no pile of `utils.ts` helpers. Defer `atlas/codebook.json` and `seeds/pilot.json` until Bryan’s dump exists.
+Prefer **classes with static methods**; no pile of `utils.ts` helpers. Defer `atlas/codebook.json` and `seeds/pilot.json` until Brian’s dump exists.
 
 ```
 src/Atlas.ts      Atlas.load / Atlas.codes
@@ -128,7 +128,7 @@ src/cli.ts
 
 `Pipeline.run` is the only composition root. Keep Playwright and the LLM client inside `Capture` and `Labeler`. Do not add Next.js, tests-as-product, or extra packages beyond `playwright`, `zod`, `ai` (or the provider SDK), and `tsx`.
 
-## 7. Open questions for Bryan
+## 7. Open questions for Brian
 
 1. Where is the Atlas, and what is the source format (MD, Notion, JSON, Figma)?
 2. Closed coding only, or may the model propose candidate patterns for Jeremy’s atlas work?
