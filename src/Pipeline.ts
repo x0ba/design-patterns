@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Atlas, type AtlasCodebook } from "./Atlas.ts";
-import { Capture, DEFAULT_NAV_DELAY_MS, type CaptureResult } from "./Capture.ts";
+import { Capture, CaptureError, DEFAULT_NAV_DELAY_MS, type CaptureResult } from "./Capture.ts";
 import { Labeler, type LabelResult } from "./Labeler.ts";
 import { Record, type CaptureMeta, type UiRecord } from "./Record.ts";
 
@@ -19,6 +20,7 @@ export type PipelineOptions = {
   only?: string[];
   delayMs?: number;
   captureOnly?: boolean;
+  fromCapture?: boolean;
   doubleLabel?: number;
   labelerBin?: string;
   agentTimeoutMs?: number;
@@ -71,7 +73,22 @@ export class Pipeline {
     const parsed = new URL(url);
     const host = parsed.hostname.replace(/^www\./, "");
     const path = parsed.pathname.replace(/\/+$/, "").replace(/^\//, "").replace(/[/]+/g, "_");
-    return (path ? `${host}_${path}` : host).replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 120);
+    const query = parsed.search.replace(/^\?/, "").replace(/[&?=]+/g, "-");
+    const stem = [host, path, query]
+      .filter(Boolean)
+      .join("_")
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .slice(0, 100);
+    const hash = createHash("sha256").update(url).digest("hex").slice(0, 8);
+    return `${stem}-${hash}`;
+  }
+
+  static claimSlug(seen: Map<string, string>, slug: string, url: string): void {
+    const prior = seen.get(slug);
+    if (prior && prior !== url) {
+      throw new Error(`Output path collision: ${slug} already used by ${prior}`);
+    }
+    seen.set(slug, url);
   }
 
   static async run(opts: PipelineOptions): Promise<PipelineRunResult> {
@@ -82,6 +99,7 @@ export class Pipeline {
         ? opts.agentTimeoutMs
         : Labeler.DEFAULT_TIMEOUT_MS;
     const model = opts.model?.trim() || Labeler.DEFAULT_MODEL;
+    const fromCapture = Boolean(opts.fromCapture) && !opts.captureOnly;
     mkdirSync(opts.outDir, { recursive: true });
 
     let seeds = opts.seeds;
@@ -92,23 +110,31 @@ export class Pipeline {
     if (opts.limit && opts.limit > 0) seeds = seeds.slice(0, opts.limit);
 
     const result: PipelineRunResult = { captures: [], records: [], doubles: [], failures: [] };
+    const mode = opts.captureOnly ? " (capture only)" : fromCapture ? " (from capture)" : "";
     Pipeline.log(
-      `pipeline: ${seeds.length} url(s)${opts.captureOnly ? " (capture only)" : ""}, model ${model}, agent timeout ${Math.round(timeoutMs / 1000)}s, out ${opts.outDir}`,
+      `pipeline: ${seeds.length} url(s)${mode}, model ${model}, agent timeout ${Math.round(timeoutMs / 1000)}s, out ${opts.outDir}`,
     );
 
+    const seenSlugs = new Map<string, string>();
     for (let i = 0; i < seeds.length; i++) {
       const seed = seeds[i]!;
-      if (i > 0 && delayMs > 0) {
+      if (!fromCapture && i > 0 && delayMs > 0) {
         await Pipeline.sleep(delayMs);
       }
       const tag = `[${i + 1}/${seeds.length}]`;
-      const slug = Pipeline.slug(seed.url);
-      const screenshotPath = join(opts.outDir, `${slug}.png`);
+      let slug = "";
       let captured = false;
       try {
-        const capture = await Pipeline.captureOne(tag, seed.url, screenshotPath);
+        slug = Pipeline.slug(seed.url);
+        Pipeline.claimSlug(seenSlugs, slug, seed.url);
+        const screenshotPath = join(opts.outDir, `${slug}.png`);
+        const capture = fromCapture
+          ? Pipeline.reuseOne(tag, seed.url, join(opts.outDir, `${slug}.capture.json`))
+          : await Pipeline.captureOne(tag, seed.url, screenshotPath);
+        if (!fromCapture) {
+          Capture.writeSidecar(capture, join(opts.outDir, `${slug}.capture.json`));
+        }
         captured = true;
-        Capture.writeSidecar(capture, join(opts.outDir, `${slug}.capture.json`));
         result.captures.push({ seed, slug, capture });
         if (opts.captureOnly) continue;
         const labeled = await Pipeline.labelOne(
@@ -271,6 +297,16 @@ export class Pipeline {
       dimKeysAgree,
       dimRate: dimKeysCompared ? dimKeysAgree / dimKeysCompared : null,
     };
+  }
+
+  private static reuseOne(tag: string, url: string, sidecarPath: string): CaptureResult {
+    Pipeline.log(`${tag} reuse ${url}`);
+    const capture = Capture.readSidecar(sidecarPath);
+    if (capture.url !== url) {
+      throw new CaptureError(`Saved capture URL ${capture.url} does not match seed ${url}`);
+    }
+    Pipeline.log(`${tag} reuse ${url} ok`);
+    return capture;
   }
 
   private static async captureOne(tag: string, url: string, screenshotPath: string): Promise<CaptureResult> {

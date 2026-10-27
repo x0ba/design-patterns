@@ -32,6 +32,9 @@ tsx src/cli.ts capture --out output --limit 3
 # including retries and the .b double-label runs.
 tsx src/cli.ts run --out output --double 5
 tsx src/cli.ts run --out output --double 5 --model grok-4.7
+
+# Capture now, label later. A plain run always captures again.
+tsx src/cli.ts run --from-capture --out output --double 5
 ```
 
 Daniel’s local command for the 20-record pilot plus 5 double-labels:
@@ -55,7 +58,9 @@ This cloud environment installed `cursor-agent` but is **not logged in** and has
 
 ## Output
 
-One PNG + one JSON record per seed URL under `--out` (default `output/`). The primary `<slug>.json` is the in-memory `UiRecord` with `absent` patterns omitted at write time (`Record.serializable` / `Record.write(..., { omitAbsent: true })`). Validation still requires all 119 ids before that filter. A codebook id that is not in `patterns` is absent. Double-label files (`<slug>.b.json`) keep the full 119, including absents. Capture sidecars (`*.capture.json`) are unchanged. `summary.json` records failures, double-label agreement, and the model id. Agreement compares the full in-memory records, not the filtered files.
+One PNG + one JSON record per seed URL under `--out` (default `output/`). The file stem is the host, path, and query, plus a short hash of the full URL, so `/catalog?variant=A` and `/catalog?variant=B` do not share a PNG, sidecar, or record. A second distinct URL that would reuse an output name is a capture failure and nothing is written. The primary `<slug>.json` is the in-memory `UiRecord` with `absent` patterns omitted at write time (`Record.serializable` / `Record.write(..., { omitAbsent: true })`). Validation still requires all 119 ids before that filter. A codebook id that is not in `patterns` is absent. Double-label files (`<slug>.b.json`) keep the full 119, including absents. Capture sidecars (`*.capture.json`) are unchanged. `summary.json` records failures, double-label agreement, and the model id. Agreement compares the full in-memory records, not the filtered files.
+
+`tsx src/cli.ts capture` writes `<slug>.png` and `<slug>.capture.json`. `tsx src/cli.ts run --from-capture` labels those saved files and does not fetch the page again. A plain `run` always captures again.
 
 Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure.
 

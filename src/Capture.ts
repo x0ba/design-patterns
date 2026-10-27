@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { chromium, type Page } from "playwright";
 
 export const VIEWPORT_WIDTH = 1440;
@@ -65,11 +65,9 @@ export class Capture {
         const response = await page.goto(url, { waitUntil: "networkidle", timeout });
         if (response) status = response.status();
       } catch (error) {
-        if (page.url() === "about:blank") {
-          throw new CaptureError(
-            `Navigation failed for ${url}: ${error instanceof Error ? error.message : error}`,
-          );
-        }
+        throw new CaptureError(
+          `Navigation failed for ${url}: ${error instanceof Error ? error.message : error}`,
+        );
       }
 
       if (status >= 400) {
@@ -131,9 +129,13 @@ export class Capture {
     }
   }
 
-  static robotsAllows(robotsTxt: string, path: string): boolean {
-    const groups: { agents: string[]; rules: { allow: boolean; prefix: string }[] }[] = [];
-    let current: { agents: string[]; rules: { allow: boolean; prefix: string }[] } | null =
+  static robotsAllows(
+    robotsTxt: string,
+    path: string,
+    agent = "designpatternatlasbot",
+  ): boolean {
+    const groups: { agents: string[]; rules: { allow: boolean; pattern: string }[] }[] = [];
+    let current: { agents: string[]; rules: { allow: boolean; pattern: string }[] } | null =
       null;
     let seenBlank = true;
 
@@ -148,35 +150,88 @@ export class Capture {
       const field = line.slice(0, colon).trim().toLowerCase();
       const value = line.slice(colon + 1).trim();
       if (field === "user-agent") {
-        if (seenBlank || !current) {
+        if (seenBlank || !current || current.rules.length > 0) {
           current = { agents: [], rules: [] };
           groups.push(current);
         }
         current.agents.push(value.toLowerCase());
         seenBlank = false;
       } else if ((field === "disallow" || field === "allow") && current) {
-        current.rules.push({ allow: field === "allow", prefix: value });
+        current.rules.push({ allow: field === "allow", pattern: value });
         seenBlank = false;
       }
     }
 
-    const applicable = groups.filter((group) =>
-      group.agents.some((agent) => agent === "*" || agent === "designpatternatlasbot"),
-    );
+    const product = agent.toLowerCase();
+    const specific = groups.filter((group) => group.agents.includes(product));
+    const applicable = specific.length
+      ? specific
+      : groups.filter((group) => group.agents.includes("*"));
     if (!applicable.length) return true;
 
     let best: { allow: boolean; length: number } | null = null;
     for (const group of applicable) {
       for (const rule of group.rules) {
-        if (rule.prefix === "") continue;
-        if (!path.startsWith(rule.prefix) && rule.prefix !== "/") continue;
-        const length = rule.prefix.length;
+        if (rule.pattern === "") continue;
+        if (!Capture.pathMatches(rule.pattern, path)) continue;
+        const length = rule.pattern.length;
         if (!best || length > best.length || (length === best.length && rule.allow)) {
           best = { allow: rule.allow, length };
         }
       }
     }
     return best ? best.allow : true;
+  }
+
+  static readSidecar(path: string): CaptureResult {
+    let raw: Partial<CaptureResult>;
+    try {
+      raw = JSON.parse(readFileSync(path, "utf8")) as Partial<CaptureResult>;
+    } catch (error) {
+      throw new CaptureError(
+        `Capture sidecar is unreadable: ${path}: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    if (!raw.url || !raw.capturedAt || !raw.finalUrl || !raw.title || raw.ariaSnapshot == null) {
+      throw new CaptureError(`Capture sidecar is missing required fields: ${path}`);
+    }
+    const screenshotPath = Capture.resolveScreenshot(path, raw);
+    return {
+      url: raw.url,
+      capturedAt: raw.capturedAt,
+      finalUrl: raw.finalUrl,
+      status: raw.status ?? 0,
+      title: raw.title,
+      viewport: raw.viewport ?? { width: VIEWPORT_WIDTH, height: 900 },
+      screenshotPx: raw.screenshotPx ?? { width: 0, height: 0 },
+      userAgent: raw.userAgent ?? "",
+      screenshotPath,
+      screenshotRef: raw.screenshotRef ?? basename(screenshotPath),
+      ariaSnapshot: raw.ariaSnapshot,
+      clipCssPx: raw.clipCssPx ?? CLIP_CSS_PX,
+    };
+  }
+
+  private static resolveScreenshot(sidecarPath: string, raw: Partial<CaptureResult>): string {
+    if (raw.screenshotPath && existsSync(raw.screenshotPath)) return raw.screenshotPath;
+    const ref = raw.screenshotRef ? basename(raw.screenshotRef) : "";
+    const beside = ref ? join(dirname(sidecarPath), ref) : "";
+    if (beside && existsSync(beside)) return beside;
+    throw new CaptureError(`Capture screenshot missing for ${sidecarPath}`);
+  }
+
+  private static pathMatches(pattern: string, path: string): boolean {
+    let body = pattern;
+    let anchored = false;
+    if (body.endsWith("$")) {
+      anchored = true;
+      body = body.slice(0, -1);
+    }
+    const escaped = body
+      .split("*")
+      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+      .join(".*");
+    return new RegExp(`^${escaped}${anchored ? "$" : ""}`).test(path);
   }
 
   static writeSidecar(result: CaptureResult, path: string): void {

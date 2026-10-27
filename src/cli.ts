@@ -50,6 +50,7 @@ class Cli {
       only: flags.url ? [String(flags.url)] : undefined,
       delayMs: flags.delay ? Number(flags.delay) : undefined,
       captureOnly,
+      fromCapture: captureOnly ? false : flags["from-capture"] === true,
       doubleLabel: captureOnly ? 0 : flags.double ? Number(flags.double) : 0,
       agentTimeoutMs: flags.timeout ? Number(flags.timeout) : undefined,
       model: Cli.modelFlag(flags.model),
@@ -113,13 +114,15 @@ class Cli {
 Usage:
   tsx src/cli.ts extract <atlas.html> [atlas/codebook.json]
   tsx src/cli.ts capture [--out output] [--limit N] [--url URL] [--delay MS]
-  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS] [--model ID]
+  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS] [--model ID] [--from-capture]
 
 Progress is written to stderr as each step finishes. --timeout is the per
 cursor-agent call limit in milliseconds (default 600000 = 10 min); the child
 is killed and the URL is recorded as a label failure. --model is passed to
 every cursor-agent spawn (default grok-4.7). summary.json is written to the
-output directory and includes the model id.
+output directory and includes the model id. --from-capture labels the saved
+<slug>.png and <slug>.capture.json from a previous capture and does not fetch
+the page again. Output names include the query string and a hash of the full URL.
 
 Daniel's local command for the 20-record pilot (+ 5 double-labels):
   tsx src/cli.ts run --out output --double 5

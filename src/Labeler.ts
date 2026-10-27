@@ -189,7 +189,11 @@ export class Labeler {
     const prompt = Labeler.statusPrompt(codebook, screenshot, ariaSnapshot, url);
     const parsed = await Labeler.callAgent(
       prompt,
-      (text) => Record.StatusDraft.parse(Labeler.parseJson(text)),
+      (text) => {
+        const draft = Record.StatusDraft.parse(Labeler.parseJson(text));
+        Record.assertStatus(draft, codebook);
+        return draft;
+      },
       { bin, timeoutMs, model, onWait, onRetry },
     );
     return { draft: parsed.value, model: parsed.model };
@@ -209,7 +213,11 @@ export class Labeler {
     const prompt = Labeler.dimsPrompt(codebook, screenshot, presentIds, url);
     const parsed = await Labeler.callAgent(
       prompt,
-      (text) => Record.DimsDraft.parse(Labeler.parseJson(text)),
+      (text) => {
+        const draft = Record.DimsDraft.parse(Labeler.parseJson(text));
+        Record.assertDimsDraft(draft, codebook, presentIds);
+        return draft;
+      },
       { bin, timeoutMs, model, onWait, onRetry },
     );
     return parsed.value;

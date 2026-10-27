@@ -179,6 +179,57 @@ export class Record {
     return entry;
   }
 
+  static assertStatus(draft: StatusDraft, codebook: AtlasCodebook): void {
+    const expected = Atlas.ids(codebook);
+    if (draft.patterns.length !== expected.length) {
+      throw new RecordError(
+        `Expected exactly ${expected.length} hits, got ${draft.patterns.length}`,
+      );
+    }
+    const seen = new Set<string>();
+    const allowed = new Set(expected);
+    for (const hit of draft.patterns) {
+      if (!allowed.has(hit.id)) {
+        throw new RecordError(`Invented id: ${hit.id}`);
+      }
+      if (seen.has(hit.id)) {
+        throw new RecordError(`Duplicate id: ${hit.id}`);
+      }
+      seen.add(hit.id);
+      if (hit.status === "present" && !hit.evidence.length) {
+        throw new RecordError(`Present without evidence: ${hit.id}`);
+      }
+      if (hit.status === "uncertain" && !hit.rationale.trim()) {
+        throw new RecordError(`Uncertain without rationale: ${hit.id}`);
+      }
+    }
+    if (seen.size !== expected.length) {
+      const missing = expected.filter((id) => !seen.has(id));
+      throw new RecordError(`Missing ids: ${missing.join(", ")}`);
+    }
+    Record.assertComponentIds(draft.components, allowed);
+  }
+
+  static assertDimsDraft(draft: DimsDraft, codebook: AtlasCodebook, presentIds: string[]): void {
+    const expected = new Set(presentIds);
+    const seen = new Set<string>();
+    for (const hit of draft.hits) {
+      if (!expected.has(hit.id)) {
+        throw new RecordError(`Dimension values for non-present id: ${hit.id}`);
+      }
+      if (seen.has(hit.id)) {
+        throw new RecordError(`Duplicate dim hit: ${hit.id}`);
+      }
+      seen.add(hit.id);
+      Record.assertDims(Record.hydrate(hit.id, codebook), hit.dims);
+    }
+    for (const id of presentIds) {
+      if (!seen.has(id)) {
+        throw new RecordError(`Present id missing dimension values: ${id}`);
+      }
+    }
+  }
+
   static merge(
     args: {
       capture: CaptureMeta;
@@ -188,7 +239,6 @@ export class Record {
     },
     codebook: AtlasCodebook,
   ): UiRecord {
-    const byId = Atlas.byId(codebook);
     const dimsById = new Map(args.dims.hits.map((hit) => [hit.id, hit.dims]));
     const patterns: PatternHit[] = args.status.patterns.map((hit) => {
       if (hit.status !== "present") return hit;
@@ -236,14 +286,6 @@ export class Record {
       confidence: args.status.confidence,
       notes: args.status.notes,
     };
-
-    for (const component of record.components) {
-      for (const id of component.atlasIds) {
-        if (!byId.has(id)) {
-          throw new RecordError(`Invented id: ${id}`);
-        }
-      }
-    }
 
     return Record.parse(record, codebook);
   }
@@ -294,6 +336,20 @@ export class Record {
     if (seen.size !== expected.length) {
       const missing = expected.filter((id) => !seen.has(id));
       throw new RecordError(`Missing ids: ${missing.join(", ")}`);
+    }
+    Record.assertComponentIds(record.components, allowed);
+  }
+
+  private static assertComponentIds(
+    components: { atlasIds: string[] }[],
+    allowed: Set<string>,
+  ): void {
+    for (const component of components) {
+      for (const id of component.atlasIds) {
+        if (!allowed.has(id)) {
+          throw new RecordError(`Invented id: ${id}`);
+        }
+      }
     }
   }
 

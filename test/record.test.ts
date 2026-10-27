@@ -135,4 +135,30 @@ describe("Record.parse / merge", () => {
       assert.equal(hit.dims.length, dims.dims.length);
     }
   });
+
+  it("rejects an invented component atlas id on parse and on merge", () => {
+    const patterns = Fixtures.allAbsent(codebook).patterns as PatternHit[];
+    const saved = Fixtures.record(codebook, patterns);
+    saved.components = [{ role: "header", atlasIds: ["not-a-real-atlas-id"] }];
+    assert.throws(
+      () => Record.parse(saved, codebook),
+      (error: unknown) => error instanceof RecordError && /Invented id: not-a-real-atlas-id/.test(error.message),
+    );
+
+    const status = Fixtures.allAbsent(codebook);
+    status.components = [{ role: "header", atlasIds: ["not-a-real-atlas-id"] }];
+    assert.throws(
+      () =>
+        Record.merge(
+          {
+            capture: Fixtures.capture(),
+            status,
+            dims: { hits: [] },
+            model: { name: "test", version: "0" },
+          },
+          codebook,
+        ),
+      (error: unknown) => error instanceof RecordError && /Invented id: not-a-real-atlas-id/.test(error.message),
+    );
+  });
 });

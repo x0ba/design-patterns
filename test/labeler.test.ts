@@ -164,3 +164,81 @@ process.exit(1);
     }
   });
 });
+
+describe("Labeler codebook retry", () => {
+  it("retries a short status list and an illegal dimension before merge", async () => {
+    const codebook = Fixtures.codebook();
+    const presentId = codebook.entries[0]!.id;
+    const shortStatus = Fixtures.allAbsent(codebook);
+    shortStatus.patterns = shortStatus.patterns.slice(0, 118);
+    const goodStatus = Fixtures.allAbsent(codebook);
+    goodStatus.patterns = goodStatus.patterns.map((hit) =>
+      hit.id === presentId
+        ? {
+            id: presentId,
+            status: "present" as const,
+            confidence: 0.9,
+            evidence: [{ kind: "text" as const, quote: "chart" }],
+          }
+        : hit,
+    );
+    const badDims = {
+      hits: [Fixtures.presentDims(codebook, presentId)],
+    };
+    badDims.hits[0]!.dims[0] = {
+      key: badDims.hits[0]!.dims[0]!.key,
+      values: ["not-a-real-variant"],
+    };
+    const goodDims = { hits: [Fixtures.presentDims(codebook, presentId)] };
+
+    const dir = mkdtempSync(join(tmpdir(), "atlas-retry-"));
+    const statusCount = join(dir, "status.count");
+    const dimsCount = join(dir, "dims.count");
+    const statusBad = join(dir, "status-bad.json");
+    const statusGood = join(dir, "status-good.json");
+    const dimsBad = join(dir, "dims-bad.json");
+    const dimsGood = join(dir, "dims-good.json");
+    const bin = join(dir, "fake-agent.mjs");
+    writeFileSync(statusCount, "0");
+    writeFileSync(dimsCount, "0");
+    writeFileSync(statusBad, JSON.stringify(shortStatus));
+    writeFileSync(statusGood, JSON.stringify(goodStatus));
+    writeFileSync(dimsBad, JSON.stringify(badDims));
+    writeFileSync(dimsGood, JSON.stringify(goodDims));
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+const prompt = process.argv.at(-1) ?? "";
+const dims = prompt.includes("code every sub-dimension");
+const counter = dims ? ${JSON.stringify(dimsCount)} : ${JSON.stringify(statusCount)};
+const n = Number(readFileSync(counter, "utf8") || "0") + 1;
+writeFileSync(counter, String(n));
+const file = dims
+  ? (n === 1 ? ${JSON.stringify(dimsBad)} : ${JSON.stringify(dimsGood)})
+  : (n === 1 ? ${JSON.stringify(statusBad)} : ${JSON.stringify(statusGood)});
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(file, "utf8"), model: "grok-4.7" }));
+`,
+    );
+    chmodSync(bin, 0o755);
+    try {
+      const labeled = await Labeler.label({
+        codebook,
+        screenshotPath: join(dir, "shot.png"),
+        ariaSnapshot: "- main: page",
+        url: "https://example.com/",
+        bin,
+        model: "grok-4.7",
+        timeoutMs: 15000,
+        log: () => {},
+      });
+      assert.equal(readFileSync(statusCount, "utf8"), "2");
+      assert.equal(readFileSync(dimsCount, "utf8"), "2");
+      assert.equal(labeled.status.patterns.length, 119);
+      assert.equal(labeled.dims.hits.length, 1);
+      assert.equal(labeled.dims.hits[0]?.dims[0]?.values[0], goodDims.hits[0]?.dims[0]?.values[0]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
