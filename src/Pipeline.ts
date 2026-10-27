@@ -22,6 +22,7 @@ export type PipelineOptions = {
   doubleLabel?: number;
   labelerBin?: string;
   agentTimeoutMs?: number;
+  model?: string;
 };
 
 export type PipelineRunResult = {
@@ -35,6 +36,7 @@ export type RunSummary = {
   records: number;
   captures: number;
   failures: PipelineRunResult["failures"];
+  model: string;
   doubles: { slug: string; url: string; path: string; agreement: Agreement }[];
   agreement: {
     statusN: number;
@@ -79,6 +81,7 @@ export class Pipeline {
       opts.agentTimeoutMs && opts.agentTimeoutMs > 0
         ? opts.agentTimeoutMs
         : Labeler.DEFAULT_TIMEOUT_MS;
+    const model = opts.model?.trim() || Labeler.DEFAULT_MODEL;
     mkdirSync(opts.outDir, { recursive: true });
 
     let seeds = opts.seeds;
@@ -90,7 +93,7 @@ export class Pipeline {
 
     const result: PipelineRunResult = { captures: [], records: [], doubles: [], failures: [] };
     Pipeline.log(
-      `pipeline: ${seeds.length} url(s)${opts.captureOnly ? " (capture only)" : ""}, agent timeout ${Math.round(timeoutMs / 1000)}s, out ${opts.outDir}`,
+      `pipeline: ${seeds.length} url(s)${opts.captureOnly ? " (capture only)" : ""}, model ${model}, agent timeout ${Math.round(timeoutMs / 1000)}s, out ${opts.outDir}`,
     );
 
     for (let i = 0; i < seeds.length; i++) {
@@ -115,6 +118,7 @@ export class Pipeline {
           capture,
           opts,
           timeoutMs,
+          model,
           (line) => Pipeline.log(`${tag} ${line}`),
         );
         result.records.push(labeled);
@@ -145,6 +149,7 @@ export class Pipeline {
             capture,
             opts,
             timeoutMs,
+            model,
             (line) => Pipeline.log(`${tag} ${line}`),
             ".b",
           );
@@ -172,14 +177,17 @@ export class Pipeline {
       }
     }
 
-    const summary = Pipeline.summarize(result);
+    const summary = Pipeline.summarize(result, model);
     const summaryPath = Pipeline.writeSummary(summary, opts.outDir);
     Pipeline.log(Pipeline.formatSummary(summary));
     Pipeline.log(`wrote ${summaryPath}`);
     return result;
   }
 
-  static summarize(result: Pick<PipelineRunResult, "captures" | "records" | "doubles" | "failures">): RunSummary {
+  static summarize(
+    result: Pick<PipelineRunResult, "captures" | "records" | "doubles" | "failures">,
+    model = Labeler.DEFAULT_MODEL,
+  ): RunSummary {
     let statusN = 0;
     let statusAgree = 0;
     let dimKeysCompared = 0;
@@ -193,6 +201,7 @@ export class Pipeline {
     return {
       records: result.records.length,
       captures: result.captures.length,
+      model,
       failures: result.failures,
       doubles: result.doubles.map((item) => ({
         slug: item.slug,
@@ -222,7 +231,7 @@ export class Pipeline {
     const status =
       summary.agreement.statusRate == null ? "n/a" : summary.agreement.statusRate.toFixed(3);
     const dims = summary.agreement.dimRate == null ? "n/a" : summary.agreement.dimRate.toFixed(3);
-    return `summary: ${summary.records} records, ${summary.failures.length} failures, double ${summary.doubles.length}, status agreement ${status}, dim agreement ${dims}`;
+    return `summary: ${summary.records} records, ${summary.failures.length} failures, double ${summary.doubles.length}, status agreement ${status}, dim agreement ${dims}, model ${summary.model}`;
   }
 
   static formatElapsed(ms: number): string {
@@ -288,6 +297,7 @@ export class Pipeline {
     capture: CaptureResult,
     opts: PipelineOptions,
     timeoutMs: number,
+    model: string,
     log: (line: string) => void,
     suffix = "",
   ): Promise<{ seed: Seed; slug: string; record: UiRecord; path: string }> {
@@ -298,6 +308,7 @@ export class Pipeline {
       url: seed.url,
       bin: opts.labelerBin,
       timeoutMs,
+      model,
       log,
     });
     const meta: CaptureMeta = {

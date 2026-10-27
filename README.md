@@ -28,7 +28,10 @@ tsx src/cli.ts extract /path/to/design-pattern-atlas.html
 tsx src/cli.ts capture --out output --limit 3
 
 # Full pipeline: capture → two cursor-agent passes → UiRecord JSON.
+# --model defaults to grok-4.7 and is passed on every cursor-agent spawn,
+# including retries and the .b double-label runs.
 tsx src/cli.ts run --out output --double 5
+tsx src/cli.ts run --out output --double 5 --model grok-4.7
 ```
 
 Daniel’s local command for the 20-record pilot plus 5 double-labels:
@@ -39,14 +42,20 @@ Daniel’s local command for the 20-record pilot plus 5 double-labels:
 #   or: export CURSOR_API_KEY=...
 export PATH="$HOME/.local/bin:$PATH"
 npx playwright install chromium
+# confirm the Grok 4.7 id this account can use:
+agent models
 tsx src/cli.ts run --out output --double 5
 ```
+
+Every spawn is `cursor-agent -p --output-format json --force --trust --model <id>`. The default id is `grok-4.7`. It was **not** verified against an authenticated `agent models` list: CLI `2026.10.22-27dcf5f` returns `Authentication required` for both `agent models` and `cursor-agent --list-models`, and that build does not embed a model catalog. `grok-4.7` is the cloud-agent id. After `agent login`, Daniel can confirm with `agent models` (or `cursor-agent --list-models`) and override with `--model` if the CLI id differs.
+
+If the CLI rejects the id, or its JSON envelope reports a different model, that URL is a label failure (`LabelError`). It does not fall back to Auto. `model.name` on each record is the requested id. When the envelope reports an equivalent spelling (for example `Grok 4.7`), that string is kept in `model.version`. `summary.json` and the final stderr summary line include the model id.
 
 This cloud environment installed `cursor-agent` but is **not logged in** and has no `CURSOR_API_KEY`. Labels are not faked with another provider.
 
 ## Output
 
-One PNG + one JSON record per seed URL under `--out` (default `output/`). The primary `<slug>.json` is the in-memory `UiRecord` with `absent` patterns omitted at write time (`Record.serializable` / `Record.write(..., { omitAbsent: true })`). Validation still requires all 119 ids before that filter. A codebook id that is not in `patterns` is absent. Double-label files (`<slug>.b.json`) keep the full 119, including absents. Capture sidecars (`*.capture.json`) and `summary.json` (failures and double-label agreement) are unchanged. Agreement compares the full in-memory records, not the filtered files.
+One PNG + one JSON record per seed URL under `--out` (default `output/`). The primary `<slug>.json` is the in-memory `UiRecord` with `absent` patterns omitted at write time (`Record.serializable` / `Record.write(..., { omitAbsent: true })`). Validation still requires all 119 ids before that filter. A codebook id that is not in `patterns` is absent. Double-label files (`<slug>.b.json`) keep the full 119, including absents. Capture sidecars (`*.capture.json`) are unchanged. `summary.json` records failures, double-label agreement, and the model id. Agreement compares the full in-memory records, not the filtered files.
 
 Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure.
 

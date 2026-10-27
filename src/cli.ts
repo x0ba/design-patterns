@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { Atlas } from "./Atlas.ts";
+import { Labeler } from "./Labeler.ts";
 import { Pipeline } from "./Pipeline.ts";
 
 class Cli {
@@ -51,6 +52,7 @@ class Cli {
       captureOnly,
       doubleLabel: captureOnly ? 0 : flags.double ? Number(flags.double) : 0,
       agentTimeoutMs: flags.timeout ? Number(flags.timeout) : undefined,
+      model: Cli.modelFlag(flags.model),
     });
 
     console.log(
@@ -80,6 +82,14 @@ class Cli {
     if (result.failures.length) process.exitCode = 1;
   }
 
+  private static modelFlag(value: string | boolean | undefined): string {
+    if (value == null) return Labeler.DEFAULT_MODEL;
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error("--model requires a cursor-agent model id, for example grok-4.7");
+    }
+    return value.trim();
+  }
+
   private static flags(args: string[]): Record<string, string | boolean> {
     const out: Record<string, string | boolean> = {};
     for (let i = 0; i < args.length; i++) {
@@ -103,12 +113,13 @@ class Cli {
 Usage:
   tsx src/cli.ts extract <atlas.html> [atlas/codebook.json]
   tsx src/cli.ts capture [--out output] [--limit N] [--url URL] [--delay MS]
-  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS]
+  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS] [--model ID]
 
 Progress is written to stderr as each step finishes. --timeout is the per
 cursor-agent call limit in milliseconds (default 600000 = 10 min); the child
-is killed and the URL is recorded as a label failure. summary.json is written
-to the output directory.
+is killed and the URL is recorded as a label failure. --model is passed to
+every cursor-agent spawn (default grok-4.7). summary.json is written to the
+output directory and includes the model id.
 
 Daniel's local command for the 20-record pilot (+ 5 double-labels):
   tsx src/cli.ts run --out output --double 5

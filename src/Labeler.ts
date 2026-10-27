@@ -26,6 +26,7 @@ export type LabelLog = (line: string) => void;
 
 export class Labeler {
   static readonly DEFAULT_BIN = "cursor-agent";
+  static readonly DEFAULT_MODEL = "grok-4.7";
   static readonly DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
   static readonly WAIT_EVERY_MS = 30_000;
   static readonly AUTH_HINT =
@@ -40,10 +41,12 @@ export class Labeler {
     url: string;
     bin?: string;
     timeoutMs?: number;
+    model?: string;
     log?: LabelLog;
   }): Promise<LabelResult> {
     const screenshot = resolve(args.screenshotPath);
     const timeoutMs = Labeler.timeoutMs(args.timeoutMs);
+    const model = Labeler.modelId(args.model);
     const log = args.log ?? (() => {});
     const bin = args.bin;
 
@@ -56,6 +59,7 @@ export class Labeler {
       args.url,
       bin,
       timeoutMs,
+      model,
       (elapsedMs) => log(`label status… still running (${Labeler.formatElapsed(elapsedMs)})`),
       (error) => log(`label status… retry (${Labeler.brief(error)})`),
     );
@@ -69,7 +73,16 @@ export class Labeler {
     const dims =
       presentIds.length === 0
         ? { hits: [] }
-        : await Labeler.timedDims(args.codebook, screenshot, presentIds, args.url, bin, timeoutMs, log);
+        : await Labeler.timedDims(
+            args.codebook,
+            screenshot,
+            presentIds,
+            args.url,
+            bin,
+            timeoutMs,
+            model,
+            log,
+          );
     if (presentIds.length === 0) log("label dims… skip (0 present)");
 
     return {
@@ -142,6 +155,7 @@ export class Labeler {
     url: string,
     bin: string | undefined,
     timeoutMs: number,
+    model: string,
     log: LabelLog,
   ): Promise<DimsDraft> {
     log("label dims…");
@@ -153,6 +167,7 @@ export class Labeler {
       url,
       bin,
       timeoutMs,
+      model,
       (elapsedMs) => log(`label dims… still running (${Labeler.formatElapsed(elapsedMs)})`),
       (error) => log(`label dims… retry (${Labeler.brief(error)})`),
     );
@@ -167,6 +182,7 @@ export class Labeler {
     url: string,
     bin: string | undefined,
     timeoutMs: number,
+    model: string,
     onWait: (elapsedMs: number) => void,
     onRetry: (error: unknown) => void,
   ): Promise<{ draft: StatusDraft; model: { name: string; version: string } }> {
@@ -174,7 +190,7 @@ export class Labeler {
     const parsed = await Labeler.callAgent(
       prompt,
       (text) => Record.StatusDraft.parse(Labeler.parseJson(text)),
-      { bin, timeoutMs, onWait, onRetry },
+      { bin, timeoutMs, model, onWait, onRetry },
     );
     return { draft: parsed.value, model: parsed.model };
   }
@@ -186,6 +202,7 @@ export class Labeler {
     url: string,
     bin: string | undefined,
     timeoutMs: number,
+    model: string,
     onWait: (elapsedMs: number) => void,
     onRetry: (error: unknown) => void,
   ): Promise<DimsDraft> {
@@ -193,7 +210,7 @@ export class Labeler {
     const parsed = await Labeler.callAgent(
       prompt,
       (text) => Record.DimsDraft.parse(Labeler.parseJson(text)),
-      { bin, timeoutMs, onWait, onRetry },
+      { bin, timeoutMs, model, onWait, onRetry },
     );
     return parsed.value;
   }
@@ -204,6 +221,7 @@ export class Labeler {
     opts: {
       bin?: string;
       timeoutMs: number;
+      model: string;
       onWait?: (elapsedMs: number) => void;
       onRetry?: (error: unknown) => void;
     },
@@ -216,14 +234,15 @@ export class Labeler {
           ? prompt
           : `${prompt}\n\nYour previous reply failed validation:\n${Labeler.errorText(lastError)}\nReturn only one valid JSON object.`;
       try {
-        const envelope = await Labeler.spawn(bin, retryNote, opts.timeoutMs, opts.onWait);
+        const envelope = await Labeler.spawn(bin, retryNote, opts.timeoutMs, opts.model, opts.onWait);
+        const reported = Labeler.resolveModel(envelope, opts.model);
         const resultText = Labeler.resultText(envelope);
         if (Labeler.looksLikeNoVision(resultText)) {
           throw new LabelError("Chosen model could not read the screenshot; not dropping vision");
         }
         return {
           value: parse(resultText),
-          model: Labeler.modelFrom(envelope),
+          model: reported,
         };
       } catch (error) {
         lastError = error;
@@ -234,15 +253,37 @@ export class Labeler {
     throw new LabelError(`cursor-agent failed after retry: ${Labeler.errorText(lastError)}`);
   }
 
+  static agentArgs(prompt: string, model: string): string[] {
+    return ["-p", "--output-format", "json", "--force", "--trust", "--model", model, prompt];
+  }
+
+  static resolveModel(
+    envelope: AgentEnvelope,
+    requested: string,
+  ): { name: string; version: string } {
+    const reported = Labeler.reportedModel(envelope);
+    if (reported && !Labeler.modelsMatch(requested, reported)) {
+      throw new LabelError(
+        `cursor-agent model mismatch: requested ${requested}, envelope reported ${reported}. Refusing to fall back to Auto.`,
+      );
+    }
+    return { name: requested, version: reported ?? "cursor-agent" };
+  }
+
+  static modelsMatch(requested: string, reported: string): boolean {
+    return Labeler.normalizeModel(requested) === Labeler.normalizeModel(reported);
+  }
+
   private static async spawn(
     bin: string,
     prompt: string,
     timeoutMs: number,
+    model: string,
     onWait?: (elapsedMs: number) => void,
   ): Promise<AgentEnvelope> {
     const out = await Labeler.exec({
       bin,
-      args: ["-p", "--output-format", "json", "--force", "--trust", prompt],
+      args: Labeler.agentArgs(prompt, model),
       timeoutMs,
       onWait,
     });
@@ -253,14 +294,27 @@ export class Labeler {
         `cursor-agent auth failed (exit ${out.code}). ${Labeler.AUTH_HINT}\n${combined.trim()}`,
       );
     }
+    let envelope: AgentEnvelope | undefined;
+    try {
+      envelope = JSON.parse(out.stdout.trim()) as AgentEnvelope;
+    } catch {
+      envelope = undefined;
+    }
+    if (
+      Labeler.isModelRejection(out.stderr) ||
+      (!envelope && Labeler.isModelRejection(out.stdout))
+    ) {
+      throw new LabelError(
+        `cursor-agent rejected model ${model}: ${combined.trim().slice(0, 500)}`,
+      );
+    }
     if (out.code !== 0) {
       throw new LabelError(`cursor-agent exited ${out.code}: ${combined.trim()}`);
     }
-    try {
-      return JSON.parse(out.stdout.trim()) as AgentEnvelope;
-    } catch {
+    if (!envelope) {
       throw new LabelError(`cursor-agent stdout was not JSON: ${out.stdout.slice(0, 400)}`);
     }
+    return envelope;
   }
 
   private static kill(child: ChildProcess): void {
@@ -297,7 +351,38 @@ export class Labeler {
   private static isFatal(error: unknown): boolean {
     return (
       error instanceof LabelError &&
-      (error.message.includes("could not read the screenshot") || error.message.includes("timed out"))
+      (error.message.includes("could not read the screenshot") ||
+        error.message.includes("timed out") ||
+        error.message.includes("rejected model") ||
+        error.message.includes("model mismatch"))
+    );
+  }
+
+  private static modelId(value: string | undefined): string {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : Labeler.DEFAULT_MODEL;
+  }
+
+  private static normalizeModel(id: string): string {
+    return id.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  }
+
+  private static reportedModel(envelope: AgentEnvelope): string | undefined {
+    const model = envelope.model;
+    if (typeof model === "string" && model.trim()) return model.trim();
+    if (model && typeof model === "object") {
+      const obj = model as { [key: string]: unknown };
+      for (const key of ["id", "name", "model"]) {
+        const value = obj[key];
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+    }
+    return undefined;
+  }
+
+  private static isModelRejection(text: string): boolean {
+    return /unknown model|invalid model|unrecognized model|not a valid model|no such model|model not found|model .+ not available|cannot find model/i.test(
+      text,
     );
   }
 
@@ -345,13 +430,6 @@ export class Labeler {
 
   private static looksLikeNoVision(text: string): boolean {
     return /cannot (read|see|open|access) (the )?(image|screenshot|png)/i.test(text);
-  }
-
-  private static modelFrom(envelope: AgentEnvelope): { name: string; version: string } {
-    if (typeof envelope.model === "string" && envelope.model.trim()) {
-      return { name: envelope.model, version: "cursor-agent" };
-    }
-    return { name: "cursor-agent", version: "unknown" };
   }
 
   private static errorText(error: unknown): string {

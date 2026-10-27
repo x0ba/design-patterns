@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { LabelError, Labeler } from "../src/Labeler.ts";
+import { Fixtures } from "./helpers.ts";
 
 describe("Labeler.exec timeout", () => {
   it("kills a hung child and throws LabelError", async () => {
@@ -33,5 +37,130 @@ describe("Labeler.exec timeout", () => {
     });
     assert.equal(out.code, 0);
     assert.equal(out.stdout, "{\"ok\":true}");
+  });
+});
+
+describe("Labeler model pin", () => {
+  it("puts --model on every spawn, including both passes and a second double-label run", async () => {
+    const codebook = Fixtures.codebook();
+    const presentId = codebook.entries[0]!.id;
+    const status = Fixtures.allAbsent(codebook);
+    status.patterns = status.patterns.map((hit) =>
+      hit.id === presentId
+        ? {
+            id: presentId,
+            status: "present" as const,
+            confidence: 0.9,
+            evidence: [{ kind: "text" as const, quote: "chart" }],
+          }
+        : hit,
+    );
+    const dir = mkdtempSync(join(tmpdir(), "atlas-model-"));
+    const statusPath = join(dir, "status.json");
+    const dimsPath = join(dir, "dims.json");
+    const argvPath = join(dir, "argv.log");
+    const bin = join(dir, "fake-agent.mjs");
+    writeFileSync(statusPath, JSON.stringify(status));
+    writeFileSync(dimsPath, JSON.stringify({ hits: [Fixtures.presentDims(codebook, presentId)] }));
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.ARGV_LOG, JSON.stringify(args) + "\\n");
+const prompt = args.at(-1) ?? "";
+const file = prompt.includes("code every sub-dimension") ? process.env.DIMS_JSON : process.env.STATUS_JSON;
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(file, "utf8"), model: process.env.REPORT_MODEL }));
+`,
+    );
+    chmodSync(bin, 0o755);
+    const previous = {
+      ARGV_LOG: process.env.ARGV_LOG,
+      STATUS_JSON: process.env.STATUS_JSON,
+      DIMS_JSON: process.env.DIMS_JSON,
+      REPORT_MODEL: process.env.REPORT_MODEL,
+    };
+    process.env.ARGV_LOG = argvPath;
+    process.env.STATUS_JSON = statusPath;
+    process.env.DIMS_JSON = dimsPath;
+    process.env.REPORT_MODEL = "Grok 4.7";
+    try {
+      for (const pass of ["primary", "double"]) {
+        const labeled = await Labeler.label({
+          codebook,
+          screenshotPath: join(dir, "shot.png"),
+          ariaSnapshot: "- main: page",
+          url: "https://example.com/",
+          bin,
+          model: "grok-4.7",
+          timeoutMs: 15000,
+          log: () => {},
+        });
+        assert.equal(labeled.model.name, "grok-4.7", pass);
+        assert.equal(labeled.model.version, "Grok 4.7", pass);
+      }
+      const lines = readFileSync(argvPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+      assert.equal(lines.length, 4);
+      const prompts = lines.map((args) => args.at(-1) ?? "");
+      assert.equal(prompts.filter((prompt) => prompt.includes("Emit a status")).length, 2);
+      assert.equal(prompts.filter((prompt) => prompt.includes("code every sub-dimension")).length, 2);
+      for (const args of lines) {
+        const modelFlag = args.indexOf("--model");
+        assert.ok(modelFlag >= 0);
+        assert.equal(args[modelFlag + 1], "grok-4.7");
+        assert.ok(args.includes("-p"));
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value == null) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("turns a model mismatch and a CLI rejection into LabelError", async () => {
+    assert.throws(
+      () => Labeler.resolveModel({ result: "{}", model: "auto" }, "grok-4.7"),
+      (error: unknown) =>
+        error instanceof LabelError &&
+        /model mismatch/.test(error.message) &&
+        error.message.includes("auto") &&
+        error.message.includes("grok-4.7"),
+    );
+    assert.deepEqual(Labeler.resolveModel({ result: "{}", model: "Grok 4.7" }, "grok-4.7"), {
+      name: "grok-4.7",
+      version: "Grok 4.7",
+    });
+
+    const dir = mkdtempSync(join(tmpdir(), "atlas-reject-"));
+    const bin = join(dir, "reject-agent.mjs");
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+process.stderr.write("Error: unknown model 'grok-4.7'\\n");
+process.exit(1);
+`,
+    );
+    chmodSync(bin, 0o755);
+    try {
+      await assert.rejects(
+        () =>
+          Labeler.label({
+            codebook: Fixtures.codebook(),
+            screenshotPath: join(dir, "shot.png"),
+            ariaSnapshot: "- main: page",
+            url: "https://example.com/",
+            bin,
+            model: "grok-4.7",
+            timeoutMs: 15000,
+            log: () => {},
+          }),
+        (error: unknown) =>
+          error instanceof LabelError && /rejected model grok-4.7/.test(error.message),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

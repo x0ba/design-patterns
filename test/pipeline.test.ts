@@ -58,10 +58,14 @@ describe("Pipeline.agreement", () => {
       failures: [{ url: "https://example.com/fail", stage: "label", error: "boom" }],
     });
     assert.equal(summary.records, 2);
+    assert.equal(summary.model, "grok-4.7");
     assert.equal(summary.failures.length, 1);
     assert.equal(summary.agreement.statusRate, 1);
     assert.equal(summary.agreement.dimRate, 1);
-    assert.match(Pipeline.formatSummary(summary), /2 records, 1 failures, double 1, status agreement 1.000/);
+    assert.match(
+      Pipeline.formatSummary(summary),
+      /2 records, 1 failures, double 1, status agreement 1.000, dim agreement 1.000, model grok-4.7/,
+    );
 
     const dir = mkdtempSync(join(tmpdir(), "atlas-summary-"));
     const written = JSON.parse(readFileSync(Pipeline.writeSummary(summary, dir), "utf8")) as {
