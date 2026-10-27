@@ -248,9 +248,20 @@ export class Record {
     return Record.parse(record, codebook);
   }
 
-  static write(record: UiRecord, path: string): void {
+  static serializable(record: UiRecord, opts?: { omitAbsent?: boolean }): UiRecord {
+    if (!opts?.omitAbsent) return record;
+    return {
+      ...record,
+      patterns: record.patterns.filter(
+        (hit) => hit.status === "present" || hit.status === "uncertain",
+      ),
+    };
+  }
+
+  static write(record: UiRecord, path: string, opts?: { omitAbsent?: boolean }): void {
+    const body = Record.serializable(record, opts);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
+    writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
   }
 
   private static assertClosed(record: UiRecord, codebook: AtlasCodebook): void {

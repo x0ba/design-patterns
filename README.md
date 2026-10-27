@@ -1,6 +1,6 @@
 # Design Pattern Atlas labeling pipeline
 
-Visit real public UIs and label them with the Design Pattern Atlas as a closed codebook. Each visit writes one JSON record covering all **119 Atlas ids** (`present` / `absent` / `uncertain`) plus dimension values on present hits.
+Visit real public UIs and label them with the Design Pattern Atlas as a closed codebook. The labeler still scores all **119 Atlas ids** (`present` / `absent` / `uncertain`) plus dimension values on present hits. The primary `<slug>.json` file lists only `present` and `uncertain` hits; any codebook id missing from that file is **absent**.
 
 Informed by the [26 Oct 2026 Design Patterns meeting](https://notes.granola.ai/d/68c17485-29be-4d31-9eac-d96912efc4cb) (invert generate→label; Nov 9 = labeled examples) and the [12 Oct 2026 Brian/Daniel session](https://notes.granola.ai/d/ffd7abea-b48c-456e-a85f-70ec5cba6c0a). Schema and Atlas-dump decisions are in the approved plan on `cursor/ui-label-pipeline-plan-fda8`.
 
@@ -46,7 +46,7 @@ This cloud environment installed `cursor-agent` but is **not logged in** and has
 
 ## Output
 
-One PNG + one JSON `UiRecord` per seed URL under `--out` (default `output/`). Capture sidecars (`*.capture.json`) are written so a later `run` can be retried after a capture-only pass. Each run also writes `summary.json` (failures and double-label agreement).
+One PNG + one JSON record per seed URL under `--out` (default `output/`). The primary `<slug>.json` is the in-memory `UiRecord` with `absent` patterns omitted at write time (`Record.serializable` / `Record.write(..., { omitAbsent: true })`). Validation still requires all 119 ids before that filter. A codebook id that is not in `patterns` is absent. Double-label files (`<slug>.b.json`) keep the full 119, including absents. Capture sidecars (`*.capture.json`) and `summary.json` (failures and double-label agreement) are unchanged. Agreement compares the full in-memory records, not the filtered files.
 
 Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure.
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -68,5 +68,74 @@ describe("Pipeline.agreement", () => {
       failures: { error: string }[];
     };
     assert.equal(written.failures[0]?.error, "boom");
+  });
+
+  it("primary json omits absent; .b.json and the in-memory record keep all 119", () => {
+    const codebook = Fixtures.codebook();
+    const presentId = codebook.entries[0]!.id;
+    const uncertainId = codebook.entries[1]!.id;
+    const status = Fixtures.allAbsent(codebook);
+    status.patterns = status.patterns.map((hit) => {
+      if (hit.id === presentId) {
+        return {
+          id: presentId,
+          status: "present" as const,
+          confidence: 1,
+          evidence: [{ kind: "text" as const, quote: "visible" }],
+        };
+      }
+      if (hit.id === uncertainId) {
+        return {
+          id: uncertainId,
+          status: "uncertain" as const,
+          confidence: 0.4,
+          rationale: "clipped",
+        };
+      }
+      return hit;
+    });
+    const record = Record.merge(
+      {
+        capture: Fixtures.capture(),
+        status,
+        dims: { hits: [Fixtures.presentDims(codebook, presentId)] },
+        model: { name: "a", version: "0" },
+      },
+      codebook,
+    );
+    assert.equal(record.patterns.length, 119);
+
+    const dir = mkdtempSync(join(tmpdir(), "atlas-write-"));
+    try {
+      const primaryPath = join(dir, "site.json");
+      const doublePath = join(dir, "site.b.json");
+      Pipeline.writeRecord(record, primaryPath, "");
+      Pipeline.writeRecord(record, doublePath, ".b");
+
+      assert.equal(record.patterns.length, 119);
+
+      const primary = JSON.parse(readFileSync(primaryPath, "utf8")) as {
+        patterns: { id: string; status: string }[];
+      };
+      const second = JSON.parse(readFileSync(doublePath, "utf8")) as {
+        patterns: { id: string; status: string }[];
+      };
+      assert.deepEqual(
+        primary.patterns.map((hit) => hit.status).sort(),
+        ["present", "uncertain"],
+      );
+      assert.deepEqual(
+        primary.patterns.map((hit) => hit.id).sort(),
+        [presentId, uncertainId].sort(),
+      );
+      assert.equal(
+        primary.patterns.some((hit) => hit.status === "absent"),
+        false,
+      );
+      assert.equal(second.patterns.length, 119);
+      assert.equal(second.patterns.filter((hit) => hit.status === "absent").length, 117);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

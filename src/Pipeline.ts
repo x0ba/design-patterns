@@ -317,8 +317,16 @@ export class Pipeline {
       codebook,
     );
     const path = join(opts.outDir, `${slug}${suffix}.json`);
-    Record.write(record, path);
+    Pipeline.writeRecord(record, path, suffix);
     return { seed, slug, record, path };
+  }
+
+  static writeRecord(record: UiRecord, path: string, suffix = ""): void {
+    if (suffix === "") {
+      Record.write(record, path, { omitAbsent: true });
+      return;
+    }
+    Record.write(record, path);
   }
 
   private static sameSet(values: Set<string>, other: string[]): boolean {
