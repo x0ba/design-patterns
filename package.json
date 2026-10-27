@@ -1,0 +1,23 @@
+{
+  "name": "design-patterns",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/atlas.test.ts test/capture.test.ts test/record.test.ts test/pipeline.test.ts test/labeler.test.ts"
+  },
+  "dependencies": {
+    "playwright": "^1.56.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.11",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
