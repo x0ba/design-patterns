@@ -18,22 +18,29 @@
 
 ## 2. Atlas ingestion
 
-Atlas format is unknown and not in this repo. Treat whatever Brian/Jeremy have as **source**, and compile once into a typed codebook the labeler can constrain against.
+Daniel’s export is a Marble HTML inspector (`Pattern Atlas.mrbl` is the live file). The codebook is **not** the cards: it is `#atlas-json` (`generatedAt: 2026-09-22T16:21:41.602Z`). **Do not commit the HTML** (~4.5 MB). One local extract: parse that script tag and write `atlas/codebook.json`. No DOM scrape, no image pipeline (plates are inline SVGs; entries have no rasters).
+
+**What is in the dump.** 119 unique kebab-case `id`s (no collisions; `[a-z0-9-]+`; used as `data-id` and in `relations.*` — treat as stable **in this snapshot**, version = `generatedAt`). Three levels: **16 archetypes** (activity), **60 patterns** (screen/flow), **43 components** (widget). Categories **are the archetypes**, not the 12 *families* (those are customization dimensions: content, composition, layout, …). Each entry has `id`, `name`, `level`, `archetype`, `aliases`, `def`, plus a large design space (`dims` / 609 dimensions, 3166 vars), `relations`, scores, and evidence. Only `overview-detail` is human-`coded` (CHI/UIST ’25); the other 118 are `agent-coded`.
+
+**v1 set = all 119, presence only.** The meeting asked to label components *and* patterns. A slim list (id / name / level / archetype / aliases / def) is ~32 KB and fits one prompt. Dropping components would force free-form widget names; dropping archetypes loses the Atlas’s own categories. Do **not** send dims/vars/techniques/coding — that is a later design-space study, not page labeling. Prompt: emit only **present** hits (a page should have a handful, not 119). Closed coding; unknowns go in `unmappedNotes`.
 
 ```ts
-type PatternCode = {
-  code: string;          // stable id, e.g. "overview-detail"
-  name: string;
-  family?: string;       // density | layout | overview-detail | navigation | …
-  definition: string;    // 1–3 sentences; inclusion / exclusion
-  examples?: string[];   // short positive examples
-};
-type Atlas = { version: string; patterns: PatternCode[] };
+const AtlasEntry = z.object({
+  id: z.string(),                 // e.g. "overview-detail"
+  name: z.string(),
+  level: z.enum(["archetype", "pattern", "component"]),
+  archetype: z.string(),          // one of 16
+  aliases: z.array(z.string()),
+  def: z.string(),
+});
+const AtlasCodebook = z.object({
+  source: z.literal("atlas-json"),
+  generatedAt: z.string().datetime(),
+  entries: z.array(AtlasEntry),   // 119
+});
 ```
 
-`Atlas.load(path)` reads `atlas/codebook.json` (or a thin adapter if the source is Markdown/CSV). The labeler may only emit `code` values from this list (zod `z.enum` built from the file). Closed coding for v1; unknown-but-seen patterns go in `unmappedNotes`, not new codes.
-
-**Need from Brian:** (1) the Atlas dump + version; (2) canonical `code` / name / family / definition fields; (3) whether 100+ patterns are all in-scope or a v1 subset; (4) license for the codebook; (5) gold examples if any exist.
+`Atlas.load` reads the slim file. The labeler may only emit `id` values from it (`z.enum` of the 119).
 
 ## 3. Draft JSON label schema
 
@@ -50,17 +57,19 @@ const Evidence = z.discriminatedUnion("kind", [
 ]);
 
 const PatternHit = z.object({
-  code: z.string(),                     // must be in Atlas
+  id: z.string(),                       // Atlas entry id
   name: z.string(),
+  level: z.enum(["archetype", "pattern", "component"]),
+  archetype: z.string(),
   present: z.literal(true),
   confidence: z.number().min(0).max(1),
   evidence: z.array(Evidence).min(1).max(3),
 });
 
 const Component = z.object({
-  role: z.string(),                     // a11y role
+  role: z.string(),                     // a11y role from the capture
   name: z.string().optional(),
-  patternCodes: z.array(z.string()),
+  atlasIds: z.array(z.string()),        // Atlas ids this node realizes
 });
 
 const UiRecord = z.object({
@@ -88,7 +97,7 @@ const UiRecord = z.object({
     typography: z.string(),
     mood: z.array(z.string()).max(5),
   }),
-  model: z.object({ name: z.string(), version: z.string(), atlasVersion: z.string() }),
+  model: z.object({ name: z.string(), version: z.string(), atlasGeneratedAt: z.string() }),
   confidence: z.number().min(0).max(1), // record-level
   unmappedNotes: z.string().optional(),
 });
@@ -106,23 +115,23 @@ Run the pipeline once over ~20 seed URLs. One shared scope each: `page.screensho
 
 **Spot-check rubric** (human, full-page screenshot + JSON, 5–8 records):
 
-1. Every `code` exists in the Atlas version on the record.
+1. Every `id` exists in the codebook (`atlasGeneratedAt` on the record).
 2. Evidence is on that screenshot: a text `quote` is readable there, or a visual `region` lies inside the PNG (nothing from below the height cap).
 3. Structure/layout matches what a person would name.
 4. Aesthetics are specific, not generic (“blue SaaS”).
 5. Page was public; `finalUrl` is still the intended UI.
 6. Seed `domain` is correct; the 20 are not one stratum.
 
-**Pass bar.** ≥4/6 on each checked record; no invented codes. If the model invents codes or misses obvious chrome (nav, app shell), tighten the codebook prompt before scaling.
+**Pass bar.** ≥4/6 on each checked record; no invented ids. If the model invents ids or misses obvious chrome (nav, app shell), tighten the codebook prompt before scaling.
 
 **Cost / time (compute, not calendar).** Capture is seconds per URL. One vision call per full-page PNG: roughly \$0.05–\$0.40 depending on model/image size → **about \$1–\$8** for 20. Wall-clock for an unattended run: **~10–20 minutes**. Human spot-check: **~1–2 hours**. No review app: open PNG + JSON in the editor.
 
 ## 6. Module structure (small diff)
 
-Prefer **classes with static methods**; no pile of `utils.ts` helpers. Defer `atlas/codebook.json` and `seeds/pilot.json` until Brian’s dump exists.
+Prefer **classes with static methods**; no pile of `utils.ts` helpers. Compile `atlas/codebook.json` from `#atlas-json` (HTML stays local, untracked). Defer `seeds/pilot.json` until the extract exists.
 
 ```
-src/Atlas.ts      Atlas.load / Atlas.codes
+src/Atlas.ts      Atlas.load / Atlas.ids
 src/Capture.ts    Capture.fromUrl
 src/Labeler.ts    Labeler.label
 src/Record.ts     Record.parse / Record.write
@@ -134,10 +143,10 @@ src/cli.ts
 
 ## 7. Open questions for Brian
 
-1. Where is the Atlas, and what is the source format (MD, Notion, JSON, Figma)?
-2. Closed coding only, or may the model propose candidate patterns for Jeremy’s atlas work?
-3. Label **present** patterns only (this plan) or also explicit absences?
-4. v1 codebook = full 100+ or a named subset?
-5. Any sites we must include / must not scrape? Preferred license posture for stored screenshots?
+1. Closed coding only, or may the model propose candidates for Jeremy’s atlas work?
+2. Label **present** hits only (this plan) or also explicit absences?
+3. Confirm v1 is presence-only on all 119 ids, and we ignore per-entry dims/vars.
+4. Are the 118 `agent-coded` entries in-scope, given only `overview-detail` is human-coded?
+5. Any sites we must include / must not scrape? License posture for stored screenshots (and for redistributing the codebook)?
 6. Gold-label a handful with you for inter-rater check, or rubric-only for the 9 Nov checkpoint?
 7. Preferred model (and who pays the API key)?
