@@ -25,6 +25,7 @@ export type PipelineOptions = {
   labelerBin?: string;
   agentTimeoutMs?: number;
   model?: string;
+  concurrency?: number;
 };
 
 export type PipelineRunResult = {
@@ -61,6 +62,8 @@ export type Agreement = {
 };
 
 export class Pipeline {
+  static readonly DEFAULT_CONCURRENCY = 4;
+
   static loadSeeds(path = "seeds.json"): Seed[] {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Seed[];
     if (!Array.isArray(raw) || raw.length === 0) {
@@ -91,6 +94,62 @@ export class Pipeline {
     seen.set(slug, url);
   }
 
+  static concurrencyOf(value: number | undefined): number {
+    if (value == null) return Pipeline.DEFAULT_CONCURRENCY;
+    if (!Number.isInteger(value) || value < 1) {
+      throw new Error("--concurrency requires a positive integer");
+    }
+    return value;
+  }
+
+  static async runPool<T>(
+    items: readonly T[],
+    concurrency: number,
+    worker: (item: T, index: number) => Promise<void>,
+  ): Promise<void> {
+    if (items.length === 0) return;
+    const limit = Math.min(Pipeline.concurrencyOf(concurrency), items.length);
+    let cursor = 0;
+    const runners = Array.from({ length: limit }, async () => {
+      for (;;) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= items.length) return;
+        await worker(items[index]!, index);
+      }
+    });
+    await Promise.all(runners);
+  }
+
+  static hostGate(): { enter(host: string, delayMs: number): Promise<() => void> } {
+    const tail = new Map<string, Promise<void>>();
+    const lastFinished = new Map<string, number>();
+    return {
+      enter(host: string, delayMs: number) {
+        const previous = tail.get(host) ?? Promise.resolve();
+        let releaseCurrent: () => void = () => {};
+        const current = new Promise<void>((resolve) => {
+          releaseCurrent = resolve;
+        });
+        const ready = previous.then(async () => {
+          const finishedAt = lastFinished.get(host);
+          if (finishedAt != null && delayMs > 0) {
+            const wait = delayMs - (Date.now() - finishedAt);
+            if (wait > 0) await Pipeline.sleep(wait);
+          }
+        });
+        tail.set(
+          host,
+          ready.then(() => current),
+        );
+        return ready.then(() => () => {
+          lastFinished.set(host, Date.now());
+          releaseCurrent();
+        });
+      },
+    };
+  }
+
   static async run(opts: PipelineOptions): Promise<PipelineRunResult> {
     const codebook = opts.codebook ?? Atlas.load();
     const delayMs = opts.delayMs ?? DEFAULT_NAV_DELAY_MS;
@@ -100,6 +159,7 @@ export class Pipeline {
         : Labeler.DEFAULT_TIMEOUT_MS;
     const model = opts.model?.trim() || Labeler.DEFAULT_MODEL;
     const fromCapture = Boolean(opts.fromCapture) && !opts.captureOnly;
+    const concurrency = Pipeline.concurrencyOf(opts.concurrency);
     mkdirSync(opts.outDir, { recursive: true });
 
     let seeds = opts.seeds;
@@ -112,31 +172,27 @@ export class Pipeline {
     const result: PipelineRunResult = { captures: [], records: [], doubles: [], failures: [] };
     const mode = opts.captureOnly ? " (capture only)" : fromCapture ? " (from capture)" : "";
     Pipeline.log(
-      `pipeline: ${seeds.length} url(s)${mode}, model ${model}, agent timeout ${Math.round(timeoutMs / 1000)}s, out ${opts.outDir}`,
+      `pipeline: ${seeds.length} url(s)${mode}, model ${model}, agent timeout ${Math.round(timeoutMs / 1000)}s, concurrency ${concurrency}, out ${opts.outDir}`,
     );
 
     const seenSlugs = new Map<string, string>();
-    for (let i = 0; i < seeds.length; i++) {
-      const seed = seeds[i]!;
-      if (!fromCapture && i > 0 && delayMs > 0) {
-        await Pipeline.sleep(delayMs);
-      }
+    const gate = Pipeline.hostGate();
+    await Pipeline.runPool(seeds, concurrency, async (seed, i) => {
       const tag = `[${i + 1}/${seeds.length}]`;
-      let slug = "";
       let captured = false;
       try {
-        slug = Pipeline.slug(seed.url);
+        const slug = Pipeline.slug(seed.url);
         Pipeline.claimSlug(seenSlugs, slug, seed.url);
         const screenshotPath = join(opts.outDir, `${slug}.png`);
         const capture = fromCapture
           ? Pipeline.reuseOne(tag, seed.url, join(opts.outDir, `${slug}.capture.json`))
-          : await Pipeline.captureOne(tag, seed.url, screenshotPath);
+          : await Pipeline.captureOne(tag, seed.url, screenshotPath, gate, delayMs);
         if (!fromCapture) {
           Capture.writeSidecar(capture, join(opts.outDir, `${slug}.capture.json`));
         }
         captured = true;
         result.captures.push({ seed, slug, capture });
-        if (opts.captureOnly) continue;
+        if (opts.captureOnly) return;
         const labeled = await Pipeline.labelOne(
           codebook,
           seed,
@@ -151,20 +207,25 @@ export class Pipeline {
         Pipeline.log(`${tag} wrote ${labeled.path}`);
       } catch (error) {
         const stage = captured ? "label" : "capture";
-        Pipeline.log(`FAIL ${tag} ${stage}: ${Pipeline.brief(error)}`);
+        for (const line of Labeler.issueLines(error)) {
+          Pipeline.log(`FAIL ${tag} ${stage}: ${line}`);
+        }
         result.failures.push({
           url: seed.url,
           stage,
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    }
+    });
 
     const doubleN = opts.doubleLabel ?? 0;
     if (!opts.captureOnly && doubleN > 0) {
-      const targets = result.records.slice(0, doubleN);
-      for (let d = 0; d < targets.length; d++) {
-        const first = targets[d]!;
+      const recordsByUrl = new Map(result.records.map((item) => [item.seed.url, item]));
+      const targets = seeds
+        .map((seed) => recordsByUrl.get(seed.url))
+        .filter((item): item is PipelineRunResult["records"][number] => item != null)
+        .slice(0, doubleN);
+      await Pipeline.runPool(targets, concurrency, async (first, d) => {
         const tag = `double [${d + 1}/${targets.length}]`;
         try {
           const capture = result.captures.find((item) => item.slug === first.slug)!.capture;
@@ -187,20 +248,19 @@ export class Pipeline {
             path: second.path,
             agreement,
           });
-          const dims =
-            agreement.dimRate == null ? "n/a" : agreement.dimRate.toFixed(3);
-          Pipeline.log(
-            `${tag} agreement status ${agreement.statusRate.toFixed(3)} dims ${dims}`,
-          );
+          const dims = agreement.dimRate == null ? "n/a" : agreement.dimRate.toFixed(3);
+          Pipeline.log(`${tag} agreement status ${agreement.statusRate.toFixed(3)} dims ${dims}`);
         } catch (error) {
-          Pipeline.log(`FAIL ${tag}: ${Pipeline.brief(error)}`);
+          for (const line of Labeler.issueLines(error)) {
+            Pipeline.log(`FAIL ${tag}: ${line}`);
+          }
           result.failures.push({
             url: first.seed.url,
             stage: "double",
             error: error instanceof Error ? error.message : String(error),
           });
         }
-      }
+      });
     }
 
     const summary = Pipeline.summarize(result, model);
@@ -309,7 +369,15 @@ export class Pipeline {
     return capture;
   }
 
-  private static async captureOne(tag: string, url: string, screenshotPath: string): Promise<CaptureResult> {
+  private static async captureOne(
+    tag: string,
+    url: string,
+    screenshotPath: string,
+    gate: { enter(host: string, delayMs: number): Promise<() => void> },
+    delayMs: number,
+  ): Promise<CaptureResult> {
+    const host = new URL(url).host;
+    const release = await gate.enter(host, delayMs);
     const started = Date.now();
     Pipeline.log(`${tag} capture ${url}`);
     const stop = Pipeline.pulse(Labeler.WAIT_EVERY_MS, () => {
@@ -323,6 +391,7 @@ export class Pipeline {
       return capture;
     } finally {
       stop();
+      release();
     }
   }
 
@@ -390,8 +459,4 @@ export class Pipeline {
     return () => clearInterval(timer);
   }
 
-  private static brief(error: unknown, max = 300): string {
-    const text = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
-    return text.length > max ? `${text.slice(0, max)}…` : text;
-  }
 }

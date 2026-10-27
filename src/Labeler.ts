@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
+import { ZodError } from "zod";
 import { Atlas, type AtlasCodebook } from "./Atlas.ts";
 import { Record, type DimsDraft, type StatusDraft } from "./Record.ts";
 
@@ -29,6 +30,7 @@ export class Labeler {
   static readonly DEFAULT_MODEL = "grok-4.7";
   static readonly DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
   static readonly WAIT_EVERY_MS = 30_000;
+  static readonly ARIA_CAP = 16_000;
   static readonly AUTH_HINT =
     "Labeler shells `cursor-agent -p --output-format json --force --trust`. " +
     "Authenticate as Daniel: `agent login` (Cursor account) or set CURSOR_API_KEY. " +
@@ -50,7 +52,6 @@ export class Labeler {
     const log = args.log ?? (() => {});
     const bin = args.bin;
 
-    log("label status…");
     const statusStarted = Date.now();
     const status = await Labeler.runStatus(
       args.codebook,
@@ -60,8 +61,11 @@ export class Labeler {
       bin,
       timeoutMs,
       model,
+      log,
       (elapsedMs) => log(`label status… still running (${Labeler.formatElapsed(elapsedMs)})`),
-      (error) => log(`label status… retry (${Labeler.brief(error)})`),
+      (error) => {
+        for (const line of Labeler.issueLines(error)) log(`label status… retry ${line}`);
+      },
     );
     const presentIds = status.draft.patterns
       .filter((hit) => hit.status === "present")
@@ -158,7 +162,6 @@ export class Labeler {
     model: string,
     log: LabelLog,
   ): Promise<DimsDraft> {
-    log("label dims…");
     const started = Date.now();
     const dims = await Labeler.runDims(
       codebook,
@@ -168,8 +171,11 @@ export class Labeler {
       bin,
       timeoutMs,
       model,
+      log,
       (elapsedMs) => log(`label dims… still running (${Labeler.formatElapsed(elapsedMs)})`),
-      (error) => log(`label dims… retry (${Labeler.brief(error)})`),
+      (error) => {
+        for (const line of Labeler.issueLines(error)) log(`label dims… retry ${line}`);
+      },
     );
     log(`label dims… ok (${Labeler.formatElapsed(Date.now() - started)})`);
     return dims;
@@ -183,10 +189,15 @@ export class Labeler {
     bin: string | undefined,
     timeoutMs: number,
     model: string,
+    log: LabelLog,
     onWait: (elapsedMs: number) => void,
     onRetry: (error: unknown) => void,
   ): Promise<{ draft: StatusDraft; model: { name: string; version: string } }> {
     const prompt = Labeler.statusPrompt(codebook, screenshot, ariaSnapshot, url);
+    const ariaChars = ariaSnapshot.length;
+    log(
+      `label status… prompt ${Buffer.byteLength(prompt)} bytes, aria ${Math.min(ariaChars, Labeler.ARIA_CAP)}/${ariaChars} chars`,
+    );
     const parsed = await Labeler.callAgent(
       prompt,
       (text) => {
@@ -207,10 +218,12 @@ export class Labeler {
     bin: string | undefined,
     timeoutMs: number,
     model: string,
+    log: LabelLog,
     onWait: (elapsedMs: number) => void,
     onRetry: (error: unknown) => void,
   ): Promise<DimsDraft> {
     const prompt = Labeler.dimsPrompt(codebook, screenshot, presentIds, url);
+    log(`label dims… prompt ${Buffer.byteLength(prompt)} bytes, ${presentIds.length} present`);
     const parsed = await Labeler.callAgent(
       prompt,
       (text) => {
@@ -237,10 +250,7 @@ export class Labeler {
     const bin = opts.bin ?? Labeler.DEFAULT_BIN;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const retryNote =
-        attempt === 0
-          ? prompt
-          : `${prompt}\n\nYour previous reply failed validation:\n${Labeler.errorText(lastError)}\nReturn only one valid JSON object.`;
+      const retryNote = attempt === 0 ? prompt : Labeler.retryPrompt(prompt, lastError);
       try {
         const envelope = await Labeler.spawn(bin, retryNote, opts.timeoutMs, opts.model, opts.onWait);
         const reported = Labeler.resolveModel(envelope, opts.model);
@@ -400,9 +410,30 @@ export class Labeler {
     return `${Math.round(seconds)}s`;
   }
 
-  private static brief(error: unknown, max = 180): string {
-    const text = Labeler.errorText(error).replace(/\s+/g, " ").trim();
-    return text.length > max ? `${text.slice(0, max)}…` : text;
+  static clipAria(aria: string, cap = Labeler.ARIA_CAP): string {
+    if (aria.length <= cap) return aria;
+    return `${aria.slice(0, cap)}\n[aria snapshot truncated from ${aria.length} to ${cap} characters]`;
+  }
+
+  static issueLines(error: unknown): string[] {
+    if (error instanceof ZodError) {
+      return error.issues.map((issue) => {
+        const path = issue.path.map((part) => String(part)).join(".") || "(root)";
+        const hasExpected = "expected" in issue;
+        const hasReceived = "received" in issue;
+        const expected = hasExpected ? String((issue as { expected?: unknown }).expected) : "?";
+        const received = hasReceived ? String((issue as { received?: unknown }).received) : "?";
+        const detail = hasExpected || hasReceived ? ` (expected ${expected}, received ${received})` : "";
+        return `${path}: ${issue.message}${detail}`;
+      });
+    }
+    const text = Labeler.errorText(error).trim();
+    return [text || "unknown validation error"];
+  }
+
+  static retryPrompt(prompt: string, error: unknown): string {
+    const lines = Labeler.issueLines(error).map((line) => `- ${line}`).join("\n");
+    return `${prompt}\n\nYour previous reply failed validation. Fix these paths and return the full JSON object again:\n${lines}`;
   }
 
   private static resultText(envelope: AgentEnvelope): string {
@@ -444,50 +475,71 @@ export class Labeler {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private static statusPrompt(
+  static statusPrompt(
     codebook: AtlasCodebook,
     screenshot: string,
     ariaSnapshot: string,
     url: string,
   ): string {
+    const aria = Labeler.clipAria(ariaSnapshot);
     return [
       "You are labeling a real public UI against the Design Pattern Atlas codebook.",
       "Return ONLY one JSON object. No markdown fences, no prose.",
-      `Page URL: ${url}`,
-      `Screenshot PNG path (read this image with your file tools; --force/--trust are on): ${screenshot}`,
-      "If you cannot read the image, return {\"error\":\"no-vision\"} and nothing else. Do not guess from the aria tree alone.",
+      "This is the status pass. Emit a status for EVERY id. Do not emit dimension values.",
+      "The object is invalid if any required key is missing. aesthetics.typography is required on THIS pass.",
+      "It is a page-level string, not a dimension and not a type name. Do not omit it.",
       "",
-      "Accessibility tree of the SAME clipped page (viewport width 1440, clipped at 8000 CSS px):",
-      ariaSnapshot,
-      "",
-      "Slim codebook (closed coding — only these 119 ids exist):",
-      JSON.stringify(Atlas.slim(codebook)),
-      "",
-      "Emit a status for EVERY id. Schema:",
+      "Required shape. Fill every key from the screenshot. The sample values below are examples, not a type sketch:",
       JSON.stringify({
+        aesthetics: {
+          palette: ["#112233", "#f4f1ea"],
+          typography: "serif headlines with sans-serif body text",
+          mood: ["editorial", "dense"],
+        },
+        structure: {
+          layout: "single column with a top navigation bar",
+          regions: ["header", "main"],
+          density: "medium",
+        },
+        components: [{ role: "header", atlasIds: ["<codebook id>"] }],
+        confidence: 0.7,
+        notes: "optional free text; never invent an id",
         patterns: [
           {
             id: "<atlas id>",
             status: "present|absent|uncertain",
-            confidence: 0,
-            evidence: [{ kind: "text", quote: "..." }],
+            confidence: 0.8,
+            evidence: [{ kind: "text", quote: "visible text from the screenshot" }],
             rationale: "required when uncertain",
           },
         ],
-        components: [{ role: "header", name: "optional", atlasIds: ["id"] }],
-        structure: { layout: "string", regions: ["..."], density: "sparse|medium|dense" },
-        aesthetics: { palette: ["max 8"], typography: "string", mood: ["max 5"] },
-        confidence: 0,
-        notes: "optional free text; never invent an id",
       }),
       "",
       "Rules:",
+      "- aesthetics.palette: array of 1 to 8 color strings copied from the page. Required.",
+      "- aesthetics.typography: one non-empty string describing the typefaces you see. Required. Never leave it out.",
+      "- aesthetics.mood: array of 1 to 5 short words. Required.",
+      "- structure.layout: one string. structure.regions: array of strings. structure.density: sparse or medium or dense.",
+      "- components: array (empty if none). atlasIds must be codebook ids.",
+      "- confidence: number from 0 to 1.",
       "- exactly 119 pattern objects, one per codebook id",
       "- present requires 1–3 evidence items that are actually on the screenshot (text quote or visual bbox in CSS px)",
       "- uncertain requires a short rationale (unseen modal/menu/auth chrome, or clipped below 8000 px, or agent-coded def you cannot verify)",
       "- absent may include an optional short rationale",
-      "- do not emit dimension values in this pass",
+      "- do not emit dimension values in this pass. Dimension catalogs are not in the codebook below.",
       "- notes is free text only; never a new id",
+      "",
+      `Page URL: ${url}`,
+      `Screenshot PNG path (read this image with your file tools; --force/--trust are on): ${screenshot}`,
+      "If you cannot read the image, return {\"error\":\"no-vision\"} and nothing else. Do not guess from the aria tree alone.",
+      "",
+      `Accessibility tree of the SAME clipped page (viewport width 1440, clipped at 8000 CSS px, aria text capped at ${Labeler.ARIA_CAP} characters):`,
+      aria,
+      "",
+      "Slim codebook (closed coding — only these 119 ids exist; id, name, level, archetype, aliases, def; no dimensions):",
+      JSON.stringify(Atlas.slim(codebook)),
+      "",
+      "Before you answer, check that the JSON includes aesthetics.typography as a string, aesthetics.palette as an array, and aesthetics.mood as an array, plus all 119 pattern ids.",
     ].join("\n");
   }
 

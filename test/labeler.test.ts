@@ -3,7 +3,9 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { ZodError } from "zod";
 import { LabelError, Labeler } from "../src/Labeler.ts";
+import { Record } from "../src/Record.ts";
 import { Fixtures } from "./helpers.ts";
 
 describe("Labeler.exec timeout", () => {
@@ -240,5 +242,92 @@ process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(file,
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("retries a status reply that omits aesthetics.typography and sends the zod paths back", async () => {
+    const codebook = Fixtures.codebook();
+    const bad = structuredClone(Fixtures.allAbsent(codebook));
+    delete (bad.aesthetics as { typography?: string }).typography;
+    delete (bad.aesthetics as { palette?: string[] }).palette;
+    const good = Fixtures.allAbsent(codebook);
+    const dir = mkdtempSync(join(tmpdir(), "atlas-aesthetics-"));
+    const badPath = join(dir, "bad.json");
+    const goodPath = join(dir, "good.json");
+    const countPath = join(dir, "count");
+    const promptPath = join(dir, "prompts.log");
+    const bin = join(dir, "fake-agent.mjs");
+    writeFileSync(badPath, JSON.stringify(bad));
+    writeFileSync(goodPath, JSON.stringify(good));
+    writeFileSync(countPath, "0");
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+const prompt = process.argv.at(-1) ?? "";
+appendFileSync(${JSON.stringify(promptPath)}, prompt + "\\n---PROMPT---\\n");
+const n = Number(readFileSync(${JSON.stringify(countPath)}, "utf8") || "0") + 1;
+writeFileSync(${JSON.stringify(countPath)}, String(n));
+const file = n === 1 ? ${JSON.stringify(badPath)} : ${JSON.stringify(goodPath)};
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(file, "utf8"), model: "grok-4.7" }));
+`,
+    );
+    chmodSync(bin, 0o755);
+    const logged: string[] = [];
+    try {
+      const labeled = await Labeler.label({
+        codebook,
+        screenshotPath: join(dir, "shot.png"),
+        ariaSnapshot: "- main: page",
+        url: "https://example.com/",
+        bin,
+        model: "grok-4.7",
+        timeoutMs: 15000,
+        log: (line) => logged.push(line),
+      });
+      assert.equal(readFileSync(countPath, "utf8"), "2");
+      assert.equal(labeled.status.patterns.length, 119);
+      assert.equal(labeled.status.aesthetics.typography, "system");
+      const prompts = readFileSync(promptPath, "utf8").split("\n---PROMPT---\n");
+      assert.equal(prompts[0]?.includes('"typography":"string"'), false);
+      assert.match(prompts[0] ?? "", /serif headlines with sans-serif body text/);
+      assert.match(prompts[0] ?? "", /aesthetics\.typography is required/);
+      assert.equal(prompts[0]?.includes('"subs"'), false);
+      const retry = prompts[1] ?? "";
+      assert.match(retry, /aesthetics\.typography: Required \(expected string, received undefined\)/);
+      assert.match(retry, /aesthetics\.palette: Required \(expected array, received undefined\)/);
+      const retryLog = logged.filter((line) => line.includes("retry")).join("\n");
+      assert.match(retryLog, /aesthetics\.typography: Required \(expected string, received undefined\)/);
+      assert.match(retryLog, /aesthetics\.palette: Required \(expected array, received undefined\)/);
+      assert.equal(retryLog.includes('"code": "invalid_type"'), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Labeler status prompt", () => {
+  it("caps a large aria snapshot and keeps typography required", () => {
+    const codebook = Fixtures.codebook();
+    const aria = "y".repeat(20_000);
+    const prompt = Labeler.statusPrompt(codebook, "/tmp/shot.png", aria, "https://example.com/page");
+    assert.ok(prompt.includes("[aria snapshot truncated from 20000 to 16000 characters]"));
+    assert.equal(prompt.includes("y".repeat(16_001)), false);
+    assert.match(prompt, /serif headlines with sans-serif body text/);
+    assert.equal(prompt.includes('"typography":"string"'), false);
+    assert.equal(prompt.includes('"subs"'), false);
+    const bad = structuredClone(Fixtures.allAbsent(codebook));
+    delete (bad.aesthetics as { typography?: string }).typography;
+    let caught: unknown;
+    try {
+      Record.StatusDraft.parse(bad);
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof ZodError);
+    const lines = Labeler.issueLines(caught);
+    assert.deepEqual(
+      lines.filter((line) => line.startsWith("aesthetics.typography")),
+      ["aesthetics.typography: Required (expected string, received undefined)"],
+    );
   });
 });

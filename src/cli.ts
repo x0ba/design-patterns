@@ -54,6 +54,7 @@ class Cli {
       doubleLabel: captureOnly ? 0 : flags.double ? Number(flags.double) : 0,
       agentTimeoutMs: flags.timeout ? Number(flags.timeout) : undefined,
       model: Cli.modelFlag(flags.model),
+      concurrency: Cli.concurrencyFlag(flags.concurrency),
     });
 
     console.log(
@@ -81,6 +82,14 @@ class Cli {
     );
 
     if (result.failures.length) process.exitCode = 1;
+  }
+
+  private static concurrencyFlag(value: string | boolean | undefined): number {
+    if (value == null) return Pipeline.DEFAULT_CONCURRENCY;
+    if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
+      throw new Error("--concurrency requires a positive integer, for example 4");
+    }
+    return Number(value);
   }
 
   private static modelFlag(value: string | boolean | undefined): string {
@@ -114,15 +123,18 @@ class Cli {
 Usage:
   tsx src/cli.ts extract <atlas.html> [atlas/codebook.json]
   tsx src/cli.ts capture [--out output] [--limit N] [--url URL] [--delay MS]
-  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS] [--model ID] [--from-capture]
+  tsx src/cli.ts run     [--out output] [--limit N] [--url URL] [--delay MS] [--double N] [--timeout MS] [--model ID] [--concurrency N] [--from-capture]
 
 Progress is written to stderr as each step finishes. --timeout is the per
 cursor-agent call limit in milliseconds (default 600000 = 10 min); the child
 is killed and the URL is recorded as a label failure. --model is passed to
-every cursor-agent spawn (default grok-4.7). summary.json is written to the
-output directory and includes the model id. --from-capture labels the saved
-<slug>.png and <slug>.capture.json from a previous capture and does not fetch
-the page again. Output names include the query string and a hash of the full URL.
+every cursor-agent spawn (default grok-4.7). --concurrency is how many URLs
+are captured and labeled at once (default 4). The delay applies per host, not
+between different hosts. summary.json is written to the output directory and
+includes the model id. --from-capture labels the saved <slug>.png and
+<slug>.capture.json from a previous capture and does not fetch the page again.
+Output names include the query string and a hash of the full URL. A retry logs
+the full validation error, including every zod path.
 
 Daniel's local command for the 20-record pilot (+ 5 double-labels):
   tsx src/cli.ts run --out output --double 5

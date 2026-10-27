@@ -326,3 +326,174 @@ process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(${JSO
     }
   });
 });
+
+describe("Pipeline concurrency", () => {
+  it("runs at most N tasks and delays a second navigation to the same host", async () => {
+    let current = 0;
+    let max = 0;
+    await Pipeline.runPool([1, 2, 3, 4, 5, 6], 2, async () => {
+      current += 1;
+      max = Math.max(max, current);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      current -= 1;
+    });
+    assert.equal(max, 2);
+
+    const gate = Pipeline.hostGate();
+    const delay = 200;
+    const started = Date.now();
+    const events: { id: string; t: number }[] = [];
+    await Pipeline.runPool(["a1", "a2", "b1"], 3, async (id) => {
+      const host = id.startsWith("a") ? "host-a" : "host-b";
+      const release = await gate.enter(host, delay);
+      events.push({ id, t: Date.now() - started });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      release();
+    });
+    const aTimes = events.filter((event) => event.id.startsWith("a")).map((event) => event.t).sort((a, b) => a - b);
+    const bTime = events.find((event) => event.id === "b1")?.t ?? Number.POSITIVE_INFINITY;
+    assert.equal(aTimes.length, 2);
+    assert.ok(bTime < 150, `other host started at ${bTime}ms`);
+    assert.ok((aTimes[1] ?? 0) - (aTimes[0] ?? 0) >= delay, `same-host gap ${aTimes[1]! - aTimes[0]!}ms`);
+  });
+
+  it("labels at most N saved captures at once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "atlas-pool-"));
+    const codebook = Fixtures.codebook();
+    const statusPath = join(dir, "status.json");
+    const logPath = join(dir, "inflight.log");
+    writeFileSync(statusPath, JSON.stringify(Fixtures.allAbsent(codebook)));
+    const bin = join(dir, "fake-agent.mjs");
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(logPath)}, "start " + Date.now() + "\\n");
+await new Promise((resolve) => setTimeout(resolve, 180));
+appendFileSync(${JSON.stringify(logPath)}, "end " + Date.now() + "\\n");
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(${JSON.stringify(statusPath)}, "utf8"), model: "grok-4.7" }));
+`,
+    );
+    chmodSync(bin, 0o755);
+    const seeds = [1, 2, 3, 4].map((n) => ({
+      url: `https://pool-${n}.example/page`,
+      domain: "docs-education",
+      stratum: "docs",
+    }));
+    for (const seed of seeds) {
+      const slug = Pipeline.slug(seed.url);
+      const screenshotPath = join(dir, `${slug}.png`);
+      writeFileSync(screenshotPath, TINY_PNG);
+      Capture.writeSidecar(
+        {
+          url: seed.url,
+          capturedAt: "2026-10-27T00:00:00.000Z",
+          finalUrl: seed.url,
+          status: 200,
+          title: seed.url,
+          viewport: { width: 1440, height: 900 },
+          screenshotPx: { width: 1, height: 1 },
+          userAgent: "saved-ua",
+          screenshotPath,
+          screenshotRef: `${slug}.png`,
+          ariaSnapshot: "- main: saved",
+          clipCssPx: 100,
+        },
+        join(dir, `${slug}.capture.json`),
+      );
+    }
+    try {
+      const result = await Pipeline.run({
+        seeds,
+        outDir: dir,
+        codebook,
+        fromCapture: true,
+        delayMs: 0,
+        concurrency: 2,
+        labelerBin: bin,
+        agentTimeoutMs: 15_000,
+        model: "grok-4.7",
+      });
+      assert.equal(result.failures.length, 0);
+      assert.equal(result.records.length, 4);
+      const events = readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const [kind, at] = line.split(" ");
+          return { kind, at: Number(at) };
+        });
+      let current = 0;
+      let max = 0;
+      for (const event of events) {
+        current += event.kind === "start" ? 1 : -1;
+        max = Math.max(max, current);
+      }
+      assert.equal(max, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not make a different host wait for the per-host delay", { timeout: 60_000 }, async () => {
+    const delayMs = 500;
+    const started = Date.now();
+    const hits: { host: string; url: string; t: number }[] = [];
+    const start = (host: string) =>
+      new Promise<{ port: number; close: () => void }>((resolve, reject) => {
+        const server = createServer((req, res) => {
+          hits.push({ host, url: req.url ?? "", t: Date.now() - started });
+          if ((req.url ?? "").startsWith("/robots.txt")) {
+            res.writeHead(404);
+            res.end();
+            return;
+          }
+          res.writeHead(200, { "content-type": "text/html" });
+          res.end(`<!doctype html><title>${host}</title><p>${host}</p>`);
+        });
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            reject(new Error("test server did not bind"));
+            return;
+          }
+          resolve({
+            port: address.port,
+            close: () => {
+              server.closeAllConnections();
+              server.close();
+            },
+          });
+        });
+      });
+    const hostA = await start("a");
+    const hostB = await start("b");
+    const dir = mkdtempSync(join(tmpdir(), "atlas-host-delay-"));
+    try {
+      const result = await Pipeline.run({
+        seeds: [
+          { url: `http://127.0.0.1:${hostA.port}/one`, domain: "docs-education", stratum: "docs" },
+          { url: `http://127.0.0.1:${hostA.port}/two`, domain: "docs-education", stratum: "docs" },
+          { url: `http://127.0.0.1:${hostB.port}/one`, domain: "docs-education", stratum: "docs" },
+        ],
+        outDir: dir,
+        captureOnly: true,
+        delayMs,
+        concurrency: 3,
+      });
+      assert.equal(result.failures.length, 0);
+      const robots = (host: string) =>
+        hits.filter((hit) => hit.host === host && hit.url.startsWith("/robots.txt")).map((hit) => hit.t).sort((a, b) => a - b);
+      const aRobots = robots("a");
+      const bRobots = robots("b");
+      assert.equal(aRobots.length, 2);
+      assert.equal(bRobots.length, 1);
+      assert.ok((aRobots[1] ?? 0) - (aRobots[0] ?? 0) >= delayMs, `same-host robots gap ${aRobots[1]! - aRobots[0]!}ms`);
+      assert.ok((bRobots[0] ?? Number.POSITIVE_INFINITY) < (aRobots[1] ?? 0), "other host waited behind the same-host delay");
+    } finally {
+      hostA.close();
+      hostB.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

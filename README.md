@@ -30,8 +30,9 @@ tsx src/cli.ts capture --out output --limit 3
 # Full pipeline: capture → two cursor-agent passes → UiRecord JSON.
 # --model defaults to grok-4.7 and is passed on every cursor-agent spawn,
 # including retries and the .b double-label runs.
+# --concurrency defaults to 4. The navigation delay is per host.
 tsx src/cli.ts run --out output --double 5
-tsx src/cli.ts run --out output --double 5 --model grok-4.7
+tsx src/cli.ts run --out output --double 5 --model grok-4.7 --concurrency 4
 
 # Capture now, label later. A plain run always captures again.
 tsx src/cli.ts run --from-capture --out output --double 5
@@ -62,7 +63,11 @@ One PNG + one JSON record per seed URL under `--out` (default `output/`). The fi
 
 `tsx src/cli.ts capture` writes `<slug>.png` and `<slug>.capture.json`. `tsx src/cli.ts run --from-capture` labels those saved files and does not fetch the page again. A plain `run` always captures again.
 
-Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure.
+Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Lines keep their `[i/N]` prefix when URLs run together. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure. A validation retry logs every zod path in full (`aesthetics.typography: Required (expected string, received undefined)`) and sends those paths back to the model.
+
+`--concurrency` (default 4) captures and labels that many URLs at once. `robots.txt` is still checked before each navigation, and `--delay` (default 2s) is the gap between navigations to the **same host**. Different hosts do not wait on each other.
+
+The status prompt sends the slim codebook (ids and definitions, about 30 KB, no dimension catalogs) plus the page aria snapshot. Aria text is capped at 16,000 characters; longer trees keep the start and a truncation note. Dimension catalogs are only in the dims prompt, and only for ids marked present.
 
 **Git policy:** pilot outputs are **not** committed. JSON is small enough to commit later if wanted; PNGs are full-page and stay out of git. `output/` and `*.png` are in `.gitignore`. The Atlas HTML export is also gitignored (`atlas/*.html`); only `atlas/codebook.json` is committed.
 
