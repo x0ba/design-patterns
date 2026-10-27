@@ -34,10 +34,15 @@ tsx src/cli.ts run --out output --double 5
 Daniel’s local command for the 20-record pilot plus 5 double-labels:
 
 ```bash
+# once: curl https://cursor.com/install -fsS | bash
+# once: agent login          # Daniel's Cursor account
+#   or: export CURSOR_API_KEY=...
+export PATH="$HOME/.local/bin:$PATH"
+npx playwright install chromium
 tsx src/cli.ts run --out output --double 5
 ```
 
-`cursor-agent` must be installed and authenticated as Daniel (`cursor-agent login`) **or** `CURSOR_API_KEY` must be set. This environment does not substitute another model if that CLI is missing.
+This cloud environment installed `cursor-agent` but is **not logged in** and has no `CURSOR_API_KEY`. Labels are not faked with another provider.
 
 ## Output
 

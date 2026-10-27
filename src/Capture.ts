@@ -21,12 +21,6 @@ export type CaptureResult = {
   clipCssPx: number;
 };
 
-type ClipNode = {
-  children: Iterable<ClipNode>;
-  getBoundingClientRect: () => { top: number };
-  style: { display: string };
-};
-
 export class CaptureError extends Error {
   constructor(message: string) {
     super(message);
@@ -82,6 +76,7 @@ export class Capture {
         throw new CaptureError(`HTTP ${status} for ${url}`);
       }
 
+      await page.evaluate("document.fonts.ready");
       const clipHeight = await Capture.clipPage(page, clipCssPx);
       const ariaSnapshot = await page.locator("body").ariaSnapshot();
       const buffer = await page.screenshot({
@@ -91,7 +86,7 @@ export class Capture {
       });
 
       const png = Capture.pngSize(buffer);
-      const userAgent = await page.evaluate(() => navigator.userAgent);
+      const userAgent = String(await page.evaluate("navigator.userAgent"));
       const capturedAt = new Date().toISOString();
       const screenshotRef = opts.screenshotPath;
 
@@ -210,36 +205,29 @@ export class Capture {
   }
 
   private static async clipPage(page: Page, maxCssPx: number): Promise<number> {
-    const measured = await page.evaluate(() => {
-      const g = globalThis as unknown as {
-        document: {
-          documentElement: { scrollHeight: number };
-          body?: { scrollHeight: number };
-        };
-      };
-      const doc = g.document.documentElement;
-      return Math.max(doc.scrollHeight, g.document.body?.scrollHeight ?? 0, 1);
-    });
+    // String scripts: tsx/esbuild injects __name into function expressions, which
+    // Playwright then serializes into the page and blows up.
+    const measured = Number(
+      await page.evaluate(
+        `(() => Math.max(document.documentElement.scrollHeight, document.body && document.body.scrollHeight || 0, 1))()`,
+      ),
+    );
     const clipHeight = Math.max(1, Math.min(measured, maxCssPx));
-    await page.evaluate((height) => {
-      const g = globalThis as unknown as {
-        document: {
-          documentElement: { style: { maxHeight: string; overflow: string } };
-          body: ClipNode;
+    await page.evaluate(
+      `(height) => {
+        const hide = (root) => {
+          for (const child of [...root.children]) {
+            const top = child.getBoundingClientRect().top + window.scrollY;
+            if (top >= height) child.style.display = "none";
+            else hide(child);
+          }
         };
-        window: { scrollY: number };
-      };
-      const hide = (root: ClipNode) => {
-        for (const child of [...root.children]) {
-          const top = child.getBoundingClientRect().top + g.window.scrollY;
-          if (top >= height) child.style.display = "none";
-          else hide(child);
-        }
-      };
-      hide(g.document.body);
-      g.document.documentElement.style.maxHeight = `${height}px`;
-      g.document.documentElement.style.overflow = "hidden";
-    }, clipHeight);
+        hide(document.body);
+        document.documentElement.style.maxHeight = height + "px";
+        document.documentElement.style.overflow = "hidden";
+      }`,
+      clipHeight,
+    );
     return clipHeight;
   }
 

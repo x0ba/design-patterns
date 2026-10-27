@@ -26,8 +26,8 @@ export class Labeler {
   static readonly DEFAULT_BIN = "cursor-agent";
   static readonly AUTH_HINT =
     "Labeler shells `cursor-agent -p --output-format json --force --trust`. " +
-    "It needs Daniel's Cursor login (`cursor-agent login`) or CURSOR_API_KEY. " +
-    "Install: `curl https://cursor.com/install -fsS | bash`.";
+    "Authenticate as Daniel: `agent login` (Cursor account) or set CURSOR_API_KEY. " +
+    "Install: `curl https://cursor.com/install -fsS | bash` then put ~/.local/bin on PATH.";
 
   static async label(args: {
     codebook: AtlasCodebook;
@@ -114,7 +114,10 @@ export class Labeler {
         bin,
         ["-p", "--output-format", "json", "--force", "--trust", prompt],
         {
-          env: process.env,
+          env: {
+            ...process.env,
+            PATH: `${process.env.HOME ?? ""}/.local/bin:${process.env.PATH ?? ""}`,
+          },
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
@@ -134,15 +137,20 @@ export class Labeler {
         reject(error);
       });
       child.on("close", (code) => {
-        if (code !== 0) {
-          const authish = /auth|login|api[_-]?key|unauthorized|not logged/i.test(stderr + stdout);
+        const combined = `${stderr}\n${stdout}`;
+        const authish = /authentication required|not logged in|CURSOR_API_KEY|agent login/i.test(
+          combined,
+        );
+        if (authish) {
           reject(
             new LabelError(
-              authish
-                ? `cursor-agent auth failed (exit ${code}). ${Labeler.AUTH_HINT}\n${stderr || stdout}`
-                : `cursor-agent exited ${code}: ${stderr || stdout}`,
+              `cursor-agent auth failed (exit ${code}). ${Labeler.AUTH_HINT}\n${combined.trim()}`,
             ),
           );
+          return;
+        }
+        if (code !== 0) {
+          reject(new LabelError(`cursor-agent exited ${code}: ${combined.trim()}`));
           return;
         }
         try {
