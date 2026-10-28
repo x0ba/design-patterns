@@ -10,32 +10,12 @@
     "stratum": "data viz"
   },
   {
-    "url": "https://pudding.cool/",
-    "domain": "data-viz",
-    "stratum": "data viz"
-  },
-  {
-    "url": "https://earth.nullschool.net/",
-    "domain": "data-viz",
-    "stratum": "data viz"
-  },
-  {
     "url": "https://play2048.co/",
     "domain": "games",
     "stratum": "games"
   },
   {
     "url": "https://lichess.org/",
-    "domain": "games",
-    "stratum": "games"
-  },
-  {
-    "url": "https://sandspiel.club/",
-    "domain": "games",
-    "stratum": "games"
-  },
-  {
-    "url": "https://semantle.com/",
     "domain": "games",
     "stratum": "games"
   },
@@ -50,32 +30,12 @@
     "stratum": "productivity"
   },
   {
-    "url": "https://app.diagrams.net/",
-    "domain": "productivity",
-    "stratum": "productivity"
-  },
-  {
-    "url": "https://www.tldraw.com/",
-    "domain": "productivity",
-    "stratum": "productivity"
-  },
-  {
     "url": "https://www.theguardian.com/international",
     "domain": "news-media",
     "stratum": "news/media"
   },
   {
     "url": "https://www.npr.org/",
-    "domain": "news-media",
-    "stratum": "news/media"
-  },
-  {
-    "url": "https://www.quantamagazine.org/",
-    "domain": "news-media",
-    "stratum": "news/media"
-  },
-  {
-    "url": "https://restofworld.org/",
     "domain": "news-media",
     "stratum": "news/media"
   },
@@ -90,16 +50,6 @@
     "stratum": "docs/education"
   },
   {
-    "url": "https://phet.colorado.edu/",
-    "domain": "docs-education",
-    "stratum": "docs/education"
-  },
-  {
-    "url": "https://roadmap.sh/",
-    "domain": "docs-education",
-    "stratum": "docs/education"
-  },
-  {
     "url": "https://www.ikea.com/us/en/",
     "domain": "ecommerce",
     "stratum": "e-commerce browse"
@@ -110,6 +60,96 @@
     "stratum": "e-commerce browse"
   },
   {
+    "url": "https://www.openstreetmap.org/",
+    "domain": "maps",
+    "stratum": "maps"
+  },
+  {
+    "url": "https://news.ycombinator.com/",
+    "domain": "social-community",
+    "stratum": "social/community"
+  },
+  {
+    "url": "https://en.wikipedia.org/wiki/Wikipedia:Community_portal",
+    "domain": "social-community",
+    "stratum": "social/community"
+  },
+  {
+    "url": "https://stripe.com/",
+    "domain": "finance",
+    "stratum": "finance (marketing)"
+  },
+  {
+    "url": "https://www.wealthfront.com/",
+    "domain": "finance",
+    "stratum": "finance (marketing)"
+  },
+  {
+    "url": "https://www.usa.gov/",
+    "domain": "gov-civic",
+    "stratum": "gov/civic"
+  },
+  {
+    "url": "https://www.gov.uk/",
+    "domain": "gov-civic",
+    "stratum": "gov/civic"
+  },
+  {
+    "url": "https://www.awwwards.com/",
+    "domain": "design-portfolios",
+    "stratum": "design portfolios"
+  },
+  {
+    "url": "https://pudding.cool/",
+    "domain": "data-viz",
+    "stratum": "data viz"
+  },
+  {
+    "url": "https://earth.nullschool.net/",
+    "domain": "data-viz",
+    "stratum": "data viz"
+  },
+  {
+    "url": "https://sandspiel.club/",
+    "domain": "games",
+    "stratum": "games"
+  },
+  {
+    "url": "https://semantle.com/",
+    "domain": "games",
+    "stratum": "games"
+  },
+  {
+    "url": "https://app.diagrams.net/",
+    "domain": "productivity",
+    "stratum": "productivity"
+  },
+  {
+    "url": "https://www.tldraw.com/",
+    "domain": "productivity",
+    "stratum": "productivity"
+  },
+  {
+    "url": "https://www.quantamagazine.org/",
+    "domain": "news-media",
+    "stratum": "news/media"
+  },
+  {
+    "url": "https://restofworld.org/",
+    "domain": "news-media",
+    "stratum": "news/media"
+  },
+  {
+    "url": "https://phet.colorado.edu/",
+    "domain": "docs-education",
+    "stratum": "docs/education"
+  },
+  {
+    "url": "https://roadmap.sh/",
+    "domain": "docs-education",
+    "stratum": "docs/education"
+  },
+  {
     "url": "https://www.apple.com/",
     "domain": "ecommerce",
     "stratum": "e-commerce browse"
@@ -118,11 +158,6 @@
     "url": "https://www.freitag.ch/en",
     "domain": "ecommerce",
     "stratum": "e-commerce browse"
-  },
-  {
-    "url": "https://www.openstreetmap.org/",
-    "domain": "maps",
-    "stratum": "maps"
   },
   {
     "url": "https://www.windy.com/",
@@ -140,16 +175,6 @@
     "stratum": "maps"
   },
   {
-    "url": "https://news.ycombinator.com/",
-    "domain": "social-community",
-    "stratum": "social/community"
-  },
-  {
-    "url": "https://en.wikipedia.org/wiki/Wikipedia:Community_portal",
-    "domain": "social-community",
-    "stratum": "social/community"
-  },
-  {
     "url": "https://www.are.na/explore",
     "domain": "social-community",
     "stratum": "social/community"
@@ -158,16 +183,6 @@
     "url": "https://note.com/",
     "domain": "social-community",
     "stratum": "social/community"
-  },
-  {
-    "url": "https://stripe.com/",
-    "domain": "finance",
-    "stratum": "finance (marketing)"
-  },
-  {
-    "url": "https://www.wealthfront.com/",
-    "domain": "finance",
-    "stratum": "finance (marketing)"
   },
   {
     "url": "https://www.tradingview.com/",
@@ -180,16 +195,6 @@
     "stratum": "finance (marketing)"
   },
   {
-    "url": "https://www.usa.gov/",
-    "domain": "gov-civic",
-    "stratum": "gov/civic"
-  },
-  {
-    "url": "https://www.gov.uk/",
-    "domain": "gov-civic",
-    "stratum": "gov/civic"
-  },
-  {
     "url": "https://www.nasa.gov/",
     "domain": "gov-civic",
     "stratum": "gov/civic"
@@ -198,11 +203,6 @@
     "url": "https://www.service-public.gouv.fr/",
     "domain": "gov-civic",
     "stratum": "gov/civic"
-  },
-  {
-    "url": "https://www.awwwards.com/",
-    "domain": "design-portfolios",
-    "stratum": "design portfolios"
   },
   {
     "url": "https://www.pentagram.com/",
@@ -241,42 +241,42 @@
   },
   {
     "url": "https://www.airbnb.com/",
-    "domain": "travel",
+    "domain": "travel-booking",
     "stratum": "travel/booking"
   },
   {
     "url": "https://www.booking.com/",
-    "domain": "travel",
+    "domain": "travel-booking",
     "stratum": "travel/booking"
   },
   {
     "url": "https://www.japan.travel/en/",
-    "domain": "travel",
+    "domain": "travel-booking",
     "stratum": "travel/booking"
   },
   {
     "url": "https://www.lonelyplanet.com/",
-    "domain": "travel",
+    "domain": "travel-booking",
     "stratum": "travel/booking"
   },
   {
     "url": "https://bandcamp.com/",
-    "domain": "music",
+    "domain": "music-audio",
     "stratum": "music/audio"
   },
   {
     "url": "https://radio.garden/",
-    "domain": "music",
+    "domain": "music-audio",
     "stratum": "music/audio"
   },
   {
     "url": "https://learningsynths.ableton.com/",
-    "domain": "music",
+    "domain": "music-audio",
     "stratum": "music/audio"
   },
   {
     "url": "https://musicforprogramming.net/",
-    "domain": "music",
+    "domain": "music-audio",
     "stratum": "music/audio"
   },
   {
@@ -341,22 +341,22 @@
   },
   {
     "url": "https://www.rijksmuseum.nl/en/collection",
-    "domain": "museums",
+    "domain": "museums-culture",
     "stratum": "museums/culture"
   },
   {
     "url": "https://www.moma.org/",
-    "domain": "museums",
+    "domain": "museums-culture",
     "stratum": "museums/culture"
   },
   {
     "url": "https://artsandculture.google.com/",
-    "domain": "museums",
+    "domain": "museums-culture",
     "stratum": "museums/culture"
   },
   {
     "url": "https://www.tate.org.uk/",
-    "domain": "museums",
+    "domain": "museums-culture",
     "stratum": "museums/culture"
   }
 ]

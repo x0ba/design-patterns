@@ -141,7 +141,7 @@ query string and a hash of the full URL. A retry logs the full validation
 error, including every zod path. Output files are written to a temp file in
 the same directory, then renamed.
 
-Daniel's local command for the 20-record pilot (+ 5 double-labels):
+Daniel's local command for the full 72-seed set (+ 5 double-labels):
   tsx src/cli.ts run --out output --double 5
 
 Auth: cursor-agent must be installed and logged in as Daniel, or CURSOR_API_KEY must be set.

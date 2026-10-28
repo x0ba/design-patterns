@@ -143,11 +143,11 @@ const UiRecord = z.object({
 
 Manually curate a **stratified seed**, not a spider. v1 = pages that render useful UI without auth. Skip paywalls, app-store gates, and credential walls. Check robots.txt and space requests; that is engineering hygiene, not a license gate.
 
-Strata (1–2 URLs each; meeting examples in italics): *data viz*, *games*, *productivity*, plus news/media, docs/education, e-commerce browse, maps, social/community, finance (marketing), gov/civic, design portfolios. Record `domain` on every record.
+Strata (4 URLs each): data viz, games, productivity, news/media, docs/education, e-commerce browse, maps, social/community, finance (marketing), gov/civic, design portfolios, creative tools, travel/booking, music/audio, developer tools, health, food, museums/culture. Record `domain` on every record.
 
 ## 5. Pilot — labeled examples for 9 Nov
 
-Deliver **~20 model-labeled `UiRecord`s** (plus PNGs), not a rubric. Labels come from the pipeline.
+Deliver **72 model-labeled `UiRecord`s** (plus PNGs), not a rubric. Labels come from the pipeline. `--limit 20` still runs the original pilot.
 
 **Two `cursor-agent` passes per URL** (keeps prompts small):
 
@@ -156,9 +156,9 @@ Deliver **~20 model-labeled `UiRecord`s** (plus PNGs), not a rubric. Labels come
 
 `Record.parse` merges, hydrates, and rejects invented ids / illegal var names.
 
-**Gold-ish set + consistency.** The 20 records *are* the example set. Independently **double-label 5** URLs (second `cursor-agent` run, same prompt). Report agreement on status (all 119) and, where both say present, on dim `values`. Light human skim of 3–4 records for invented ids or evidence off the PNG. No review app.
+**Gold-ish set + consistency.** The 72 records *are* the example set. Independently **double-label 5** URLs (second `cursor-agent` run, same prompt). Report agreement on status (all 119) and, where both say present, on dim `values`. Light human skim of 3–4 records for invented ids or evidence off the PNG. No review app.
 
-**Cost / time (Cursor sub, not API $).** ~20 × 2 passes + 5 double-labels ≈ **45 headless runs**. Capture is seconds per URL; each agent pass is the long pole (vision + long JSON). Wall-clock for an unattended batch: on the order of **one long session**, not a research week. Human skim: **under an hour**.
+**Cost / time (Cursor sub, not API $).** 72 × 2 passes + 5 double-labels ≈ **149 headless runs**. Capture is seconds per URL; each agent pass is the long pole (vision + long JSON). Wall-clock for an unattended batch: on the order of **one long session**, not a research week. Human skim: **under an hour**.
 
 ## 6. Module structure (small diff)
 
