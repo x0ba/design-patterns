@@ -3,8 +3,8 @@ import { basename, dirname, join } from "node:path";
 import { chromium, type Page } from "playwright";
 import { Output } from "./Output.ts";
 
-export const VIEWPORT_WIDTH = 1440;
-export const CLIP_CSS_PX = 8000;
+const VIEWPORT_WIDTH = 1440;
+const CLIP_CSS_PX = 8000;
 export const DEFAULT_NAV_DELAY_MS = 2000;
 
 export type CaptureResult = {
@@ -30,10 +30,6 @@ export class CaptureError extends Error {
 }
 
 export class Capture {
-  static readonly VIEWPORT_WIDTH = VIEWPORT_WIDTH;
-  static readonly CLIP_CSS_PX = CLIP_CSS_PX;
-  static readonly DEFAULT_NAV_DELAY_MS = DEFAULT_NAV_DELAY_MS;
-
   static async fromUrl(
     url: string,
     opts: {
