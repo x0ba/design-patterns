@@ -158,7 +158,7 @@ Deliver **72 model-labeled `UiRecord`s** (plus PNGs), not a rubric. Labels come 
 
 **Gold-ish set + consistency.** The 72 records *are* the example set. Independently **double-label 5** URLs (second `cursor-agent` run, same prompt). Report agreement on status (all 119) and, where both say present, on dim `values`. Light human skim of 3–4 records for invented ids or evidence off the PNG. No review app.
 
-**Cost / time (Cursor sub, not API $).** 72 × 2 passes + 5 double-labels ≈ **149 headless runs**. Capture is seconds per URL; each agent pass is the long pole (vision + long JSON). Wall-clock for an unattended batch: on the order of **one long session**, not a research week. Human skim: **under an hour**.
+**Cost / time (Cursor sub, not API $).** (72 + 5) × 2 = **154 headless runs** when every label needs both passes, excluding retries. Labels with no present patterns skip the dimensions pass. Capture is seconds per URL; each agent pass is the long pole (vision + long JSON). Wall-clock for an unattended batch: on the order of **one long session**, not a research week. Human skim: **under an hour**.
 
 ## 6. Module structure (small diff)
 

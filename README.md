@@ -41,7 +41,7 @@ tsx src/cli.ts run --from-capture --out output --double 5
 tsx src/cli.ts run --resume --out output --double 5
 ```
 
-Daniel’s local command for the full 72-seed set plus 5 double-labels:
+Daniel’s local command for the full 72-seed set plus 5 double-labels. Each label is a status pass and a dimensions pass, so (72 + 5) × 2 = 154 headless runs, excluding retries. A label with no present patterns skips the dimensions pass:
 
 ```bash
 # once: curl https://cursor.com/install -fsS | bash
