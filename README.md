@@ -82,7 +82,7 @@ The status prompt sends the slim codebook (ids and definitions, about 30 KB, no 
 
 ## Seeds
 
-`seeds.json` is a stratified set of 20 public pages (1–2 per stratum: data viz, games, productivity, news/media, docs/education, e-commerce browse, maps, social/community, finance marketing, gov/civic, design portfolios). `domain` on each record is the stratum key.
+`seeds.json` is a stratified set of 72 public pages (4 per stratum: data viz, games, productivity, news/media, docs/education, e-commerce browse, maps, social/community, finance marketing, gov/civic, design portfolios, creative tools, travel/booking, music/audio, developer tools, health, food, museums/culture). `domain` on each record is the stratum key.
 
 ## Layout
 
