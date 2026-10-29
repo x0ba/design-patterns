@@ -41,7 +41,7 @@ tsx src/cli.ts run --from-capture --out output --double 5
 tsx src/cli.ts run --resume --out output --double 5
 ```
 
-Daniel’s local command for the 20-record pilot plus 5 double-labels:
+Daniel’s local command for the full 72-seed set plus 5 double-labels. Each label is a status pass and a dimensions pass, so (72 + 5) × 2 = 154 headless runs, excluding retries. A label with no present patterns skips the dimensions pass:
 
 ```bash
 # once: curl https://cursor.com/install -fsS | bash
@@ -72,7 +72,7 @@ PNG, capture sidecar, `<slug>.json`, `<slug>.b.json`, and `summary.json` are wri
 
 `tsx src/cli.ts capture` writes `<slug>.png` and `<slug>.capture.json`. `tsx src/cli.ts run --from-capture` labels those saved files and does not fetch the page again. A plain `run` captures again. `tsx src/cli.ts run --resume` skips a `<slug>.json` that still passes the same zod and closed-codebook checks and logs `skip (done)`. A valid `<slug>.capture.json` plus PNG is reused when the label file is missing or invalid, instead of navigating again. The same skip applies to a valid `<slug>.b.json`: agreement is computed from the two files on disk. Invalid or partial files are redone.
 
-Progress goes to stderr (`[3/20] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Lines keep their `[i/N]` prefix when URLs run together. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure. A validation retry logs every zod path in full (`aesthetics.typography: Required (expected string, received undefined)`) and sends those paths back to the model.
+Progress goes to stderr (`[3/72] capture … ok`, `label status…`, `label dims…`, `FAIL …`, a final summary line) so a long batch is not silent. Lines keep their `[i/N]` prefix when URLs run together. Each `cursor-agent` call has a timeout (default 10 minutes, `--timeout` in ms). On timeout the child is killed and that URL is a label failure. A validation retry logs every zod path in full (`aesthetics.typography: Required (expected string, received undefined)`) and sends those paths back to the model.
 
 `--concurrency` (default 4) captures and labels that many URLs at once. `robots.txt` is still checked before each navigation, and `--delay` (default 2s) is the gap between navigations to the **same host**. Different hosts do not wait on each other.
 
@@ -82,7 +82,7 @@ The status prompt sends the slim codebook (ids and definitions, about 30 KB, no 
 
 ## Seeds
 
-`seeds.json` is a stratified set of 72 public pages (4 per stratum: data viz, games, productivity, news/media, docs/education, e-commerce browse, maps, social/community, finance marketing, gov/civic, design portfolios, creative tools, travel/booking, music/audio, developer tools, health, food, museums/culture). `domain` on each record is the stratum key.
+`seeds.json` is a stratified set of 72 public pages (4 per stratum: data viz, games, productivity, news/media, docs/education, e-commerce browse, maps, social/community, finance (marketing), gov/civic, design portfolios, creative tools, travel/booking, music/audio, developer tools, health, food, museums/culture). `domain` on each record is the stratum key. The first 20 records are the original pilot in its original order, so `--limit 20` reproduces that set; the 52 newer pages follow.
 
 ## Layout
 
