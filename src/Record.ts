@@ -137,11 +137,8 @@ const CaptureMeta = z.object({
   domain: z.string(),
 });
 
-export type Box = z.infer<typeof Box>;
-export type Evidence = z.infer<typeof Evidence>;
 export type DimValue = z.infer<typeof DimValue>;
 export type PatternHit = z.infer<typeof PatternHit>;
-export type Component = z.infer<typeof Component>;
 export type UiRecord = z.infer<typeof UiRecord>;
 export type StatusDraft = z.infer<typeof StatusDraft>;
 export type DimsDraft = z.infer<typeof DimsDraft>;
@@ -155,15 +152,8 @@ export class RecordError extends Error {
 }
 
 export class Record {
-  static readonly Box = Box;
-  static readonly Evidence = Evidence;
-  static readonly DimValue = DimValue;
-  static readonly PatternHit = PatternHit;
-  static readonly Component = Component;
-  static readonly UiRecord = UiRecord;
   static readonly StatusDraft = StatusDraft;
   static readonly DimsDraft = DimsDraft;
-  static readonly CaptureMeta = CaptureMeta;
 
   static parse(input: unknown, codebook: AtlasCodebook): UiRecord {
     const parsed = UiRecord.parse(input);

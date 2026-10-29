@@ -31,9 +31,9 @@ const AtlasCodebook = z.object({
   entries: z.array(AtlasEntry),
 });
 
-export type AtlasVar = z.infer<typeof AtlasVar>;
+type AtlasVar = z.infer<typeof AtlasVar>;
 export type AtlasSub = z.infer<typeof AtlasSub>;
-export type AtlasDim = z.infer<typeof AtlasDim>;
+type AtlasDim = z.infer<typeof AtlasDim>;
 export type AtlasEntry = z.infer<typeof AtlasEntry>;
 export type AtlasCodebook = z.infer<typeof AtlasCodebook>;
 export type SlimEntry = Pick<
@@ -45,12 +45,7 @@ const EXPECTED_COUNT = 119;
 const ID_RE = /^[a-z0-9-]+$/;
 
 export class Atlas {
-  static readonly Var = AtlasVar;
-  static readonly Sub = AtlasSub;
-  static readonly Dim = AtlasDim;
-  static readonly Entry = AtlasEntry;
   static readonly Codebook = AtlasCodebook;
-  static readonly EXPECTED_COUNT = EXPECTED_COUNT;
 
   static defaultPath(): string {
     return join(dirname(fileURLToPath(import.meta.url)), "..", "atlas", "codebook.json");
