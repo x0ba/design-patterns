@@ -5,6 +5,7 @@ import { Output } from "./Output.ts";
 
 const VIEWPORT_WIDTH = 1440;
 const CLIP_CSS_PX = 8000;
+const MAX_ROBOTS_MATCH_CELLS = 8_000_000;
 export const DEFAULT_NAV_DELAY_MS = 2000;
 
 export type CaptureResult = {
@@ -224,11 +225,33 @@ export class Capture {
       anchored = true;
       body = body.slice(0, -1);
     }
-    const escaped = body
-      .split("*")
-      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-      .join(".*");
-    return new RegExp(`^${escaped}${anchored ? "$" : ""}`).test(path);
+    // An unanchored rule matches a prefix. That is the same as a trailing *.
+    return Capture.globExact(anchored ? body : `${body}*`, path);
+  }
+
+  // `*` matches any sequence, including empty. The walk is O(pattern × path)
+  // and does not backtrack. A RegExp built from the rule is exponential on
+  // nested stars (`*a*a*…`), so a short robots.txt line would stall capture.
+  // A rule too large to scan is treated as a match, so a Disallow still blocks.
+  private static globExact(pattern: string, text: string): boolean {
+    if (pattern.length * text.length > MAX_ROBOTS_MATCH_CELLS) return true;
+    const cells = text.length;
+    let prev = new Uint8Array(cells + 1);
+    prev[0] = 1;
+    for (let i = 1; i <= pattern.length; i++) {
+      const star = pattern[i - 1] === "*";
+      const next = new Uint8Array(cells + 1);
+      if (star && prev[0] === 1) next[0] = 1;
+      for (let j = 1; j <= cells; j++) {
+        if (star) {
+          if (prev[j] === 1 || next[j - 1] === 1) next[j] = 1;
+        } else if (prev[j - 1] === 1 && pattern[i - 1] === text[j - 1]) {
+          next[j] = 1;
+        }
+      }
+      prev = next;
+    }
+    return prev[cells] === 1;
   }
 
   static writeSidecar(result: CaptureResult, path: string): void {

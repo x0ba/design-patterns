@@ -67,6 +67,24 @@ Allow: /secret/public
     const specific = "User-agent: *\nDisallow: /secret\nUser-agent: designpatternatlasbot\nAllow: /\n";
     assert.equal(Capture.robotsAllows(specific, "/secret"), true);
   });
+
+  it("treats each star as its own wildcard", () => {
+    const robots = "User-agent: *\nDisallow: /a*b*c\n";
+    assert.equal(Capture.robotsAllows(robots, "/aXbYc"), false);
+    assert.equal(Capture.robotsAllows(robots, "/aXbYc/extra"), false);
+    assert.equal(Capture.robotsAllows(robots, "/aXc"), true);
+    assert.equal(Capture.robotsAllows("User-agent: *\nDisallow: /a*b$\n", "/aXb"), false);
+    assert.equal(Capture.robotsAllows("User-agent: *\nDisallow: /a*b$\n", "/aXbY"), true);
+  });
+
+  it("finishes nested star rules without backtracking", () => {
+    const nested = `/${"*a".repeat(24)}!`;
+    const robots = `User-agent: *\nDisallow: ${nested}\n`;
+    const started = Date.now();
+    assert.equal(Capture.robotsAllows(robots, `/${"a".repeat(80)}`), true);
+    assert.equal(Capture.robotsAllows(robots, `/${"a".repeat(24)}!`), false);
+    assert.ok(Date.now() - started < 200, `wildcard match took ${Date.now() - started}ms`);
+  });
 });
 
 describe("Capture.fromUrl", () => {
