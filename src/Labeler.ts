@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { resolve } from "node:path";
+import { randomBytes } from "node:crypto";
+import { unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { ZodError } from "zod";
 import { Atlas, type AtlasCodebook } from "./Atlas.ts";
 import { Record, type DimsDraft, type StatusDraft } from "./Record.ts";
@@ -29,6 +32,10 @@ export class Labeler {
   static readonly DEFAULT_BIN = "cursor-agent";
   static readonly DEFAULT_MODEL = "grok-4.7";
   static readonly DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+  // Linux rejects a single argv string at 131072 bytes (E2BIG). The dims
+  // catalog for a dense page is larger than that, so the prompt is written
+  // to a file and the argument only carries the path.
+  static readonly MAX_PROMPT_ARG_BYTES = 120_000;
   static readonly WAIT_EVERY_MS = 30_000;
   static readonly ARIA_CAP = 16_000;
   static readonly AUTH_HINT =
@@ -292,7 +299,44 @@ export class Labeler {
     return Labeler.normalizeModel(requested) === Labeler.normalizeModel(reported);
   }
 
+  private static materializePrompt(prompt: string): { arg: string; cleanup: () => void } {
+    if (Buffer.byteLength(prompt) <= Labeler.MAX_PROMPT_ARG_BYTES) {
+      return { arg: prompt, cleanup: () => {} };
+    }
+    const path = join(tmpdir(), `atlas-prompt-${process.pid}-${randomBytes(4).toString("hex")}.txt`);
+    writeFileSync(path, prompt, { encoding: "utf8", mode: 0o600 });
+    return {
+      arg: [
+        "The full labeling instructions are too large for a command argument. Read this file and follow it exactly:",
+        path,
+        "Return only the JSON object that file requests.",
+      ].join("\n"),
+      cleanup: () => {
+        try {
+          unlinkSync(path);
+        } catch {
+          // The file is already gone.
+        }
+      },
+    };
+  }
+
   private static async spawn(
+    bin: string,
+    prompt: string,
+    timeoutMs: number,
+    model: string,
+    onWait?: (elapsedMs: number) => void,
+  ): Promise<AgentEnvelope> {
+    const prepared = Labeler.materializePrompt(prompt);
+    try {
+      return await Labeler.spawnPrepared(bin, prepared.arg, timeoutMs, model, onWait);
+    } finally {
+      prepared.cleanup();
+    }
+  }
+
+  private static async spawnPrepared(
     bin: string,
     prompt: string,
     timeoutMs: number,
