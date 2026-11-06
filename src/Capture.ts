@@ -6,6 +6,8 @@ import { Output } from "./Output.ts";
 const VIEWPORT_WIDTH = 1440;
 const CLIP_CSS_PX = 8000;
 const MAX_ROBOTS_MATCH_CELLS = 8_000_000;
+
+type RobotsScan = "match" | "miss" | "unscanned";
 export const DEFAULT_NAV_DELAY_MS = 2000;
 
 export type CaptureResult = {
@@ -171,7 +173,7 @@ export class Capture {
     for (const group of applicable) {
       for (const rule of group.rules) {
         if (rule.pattern === "") continue;
-        if (!Capture.pathMatches(rule.pattern, path)) continue;
+        if (!Capture.ruleCompetes(Capture.pathMatches(rule.pattern, path), rule.allow)) continue;
         const length = rule.pattern.length;
         if (!best || length > best.length || (length === best.length && rule.allow)) {
           best = { allow: rule.allow, length };
@@ -218,7 +220,22 @@ export class Capture {
     throw new CaptureError(`Capture screenshot missing for ${sidecarPath}`);
   }
 
-  private static pathMatches(pattern: string, path: string): boolean {
+  private static ruleCompetes(verdict: RobotsScan, allow: boolean): boolean {
+    switch (verdict) {
+      case "match":
+        return true;
+      case "miss":
+        return false;
+      case "unscanned":
+        return !allow;
+      default: {
+        const unexpected: never = verdict;
+        throw new Error(`unexpected robots verdict ${unexpected}`);
+      }
+    }
+  }
+
+  private static pathMatches(pattern: string, path: string): RobotsScan {
     let body = pattern;
     let anchored = false;
     if (body.endsWith("$")) {
@@ -229,29 +246,44 @@ export class Capture {
     return Capture.globExact(anchored ? body : `${body}*`, path);
   }
 
-  // `*` matches any sequence, including empty. The walk is O(pattern × path)
-  // and does not backtrack. A RegExp built from the rule is exponential on
+  // `*` matches any sequence, including empty. A RegExp built from the rule is exponential on
   // nested stars (`*a*a*…`), so a short robots.txt line would stall capture.
-  // A rule too large to scan is treated as a match, so a Disallow still blocks.
-  private static globExact(pattern: string, text: string): boolean {
-    if (pattern.length * text.length > MAX_ROBOTS_MATCH_CELLS) return true;
+  private static globExact(pattern: string, text: string): RobotsScan {
+    const starAt = pattern.indexOf("*");
+    if (starAt < 0) return pattern === text ? "match" : "miss";
+    if (text.length < starAt) return "miss";
+    for (let k = 0; k < starAt; k++) {
+      if (pattern[k] !== text[k]) return "miss";
+    }
+    if (starAt === pattern.length - 1) return "match";
+    if (pattern.length * text.length > MAX_ROBOTS_MATCH_CELLS) return "unscanned";
+
     const cells = text.length;
     let prev = new Uint8Array(cells + 1);
     prev[0] = 1;
     for (let i = 1; i <= pattern.length; i++) {
       const star = pattern[i - 1] === "*";
       const next = new Uint8Array(cells + 1);
-      if (star && prev[0] === 1) next[0] = 1;
+      let alive = 0;
+      if (star && prev[0] === 1) {
+        next[0] = 1;
+        alive = 1;
+      }
       for (let j = 1; j <= cells; j++) {
         if (star) {
-          if (prev[j] === 1 || next[j - 1] === 1) next[j] = 1;
+          if (prev[j] === 1 || next[j - 1] === 1) {
+            next[j] = 1;
+            alive = 1;
+          }
         } else if (prev[j - 1] === 1 && pattern[i - 1] === text[j - 1]) {
           next[j] = 1;
+          alive = 1;
         }
       }
+      if (alive === 0) return "miss";
       prev = next;
     }
-    return prev[cells] === 1;
+    return prev[cells] === 1 ? "match" : "miss";
   }
 
   static writeSidecar(result: CaptureResult, path: string): void {
