@@ -85,6 +85,74 @@ Allow: /secret/public
     assert.equal(Capture.robotsAllows(robots, `/${"a".repeat(24)}!`), false);
     assert.ok(Date.now() - started < 200, `wildcard match took ${Date.now() - started}ms`);
   });
+
+  it("does not let an oversized Allow grant access to a blocked path", async () => {
+    const allow = `/public${"a".repeat(3000)}`;
+    const path = `/private?${"b".repeat(3000)}`;
+    const robots = `User-agent: *\nDisallow: /\nAllow: ${allow}\n`;
+    assert.equal(Capture.robotsAllows(robots, path), false);
+
+    const prefixedAllow = `/*${"a".repeat(3000)}`;
+    const prefixedPath = `/${"b".repeat(3000)}`;
+    assert.equal(
+      Capture.robotsAllows(`User-agent: *\nDisallow: /\nAllow: ${prefixedAllow}\n`, prefixedPath),
+      false,
+    );
+    assert.equal(
+      Capture.robotsAllows(`User-agent: *\nDisallow: ${prefixedAllow}\n`, prefixedPath),
+      false,
+    );
+    const matchedAllow = `/private${"a".repeat(3000)}`;
+    assert.equal(
+      Capture.robotsAllows(
+        `User-agent: *\nDisallow: /\nAllow: ${matchedAllow}\n`,
+        `${matchedAllow}/x`,
+      ),
+      true,
+    );
+    assert.equal(
+      Capture.robotsAllows(`User-agent: *\nDisallow: /zzzz${"a".repeat(3000)}\n`, path),
+      true,
+    );
+
+    const site = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(robots);
+    });
+    try {
+      await assert.rejects(
+        () => Capture.assertRobotsAllowed(`http://127.0.0.1:${site.port}${path}`),
+        (error: unknown) => error instanceof CaptureError && /robots.txt disallows/.test(error.message),
+      );
+    } finally {
+      site.close();
+    }
+  });
+
+  it("matches many nonmatching literal rules without stalling other work", async () => {
+    const rules = Array.from({ length: 1000 }, (_, index) => {
+      const suffix = String(index).padStart(3, "0");
+      return `Disallow: /private${"a".repeat(189)}${suffix}`;
+    });
+    const robots = `User-agent: *\n${rules.join("\n")}\n`;
+    const path = `/private?${"b".repeat(1991)}`;
+    let timerDelayMs = 0;
+    const pending = new Promise<void>((resolve) => {
+      const marked = performance.now();
+      setTimeout(() => {
+        timerDelayMs = performance.now() - marked;
+        resolve();
+      }, 0);
+    });
+    const started = performance.now();
+    const allowed = Capture.robotsAllows(robots, path);
+    const elapsedMs = performance.now() - started;
+    await pending;
+    assert.equal(allowed, true);
+    assert.equal(Capture.robotsAllows(`${robots}Disallow: /\n`, path), false);
+    assert.ok(elapsedMs < 200, `nonmatching rules blocked for ${elapsedMs}ms`);
+    assert.ok(timerDelayMs < 200, `a pending timer waited ${timerDelayMs}ms`);
+  });
 });
 
 describe("Capture.fromUrl", () => {
