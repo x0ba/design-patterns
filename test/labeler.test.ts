@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -300,6 +300,91 @@ process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(file,
       assert.match(retryLog, /aesthetics\.palette: Required \(expected array, received undefined\)/);
       assert.equal(retryLog.includes('"code": "invalid_type"'), false);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Labeler oversized prompt", () => {
+  it("passes a file path when the dims catalog exceeds the argv limit", async () => {
+    const codebook = Fixtures.codebook();
+    const presentIds = codebook.entries.map((entry) => entry.id);
+    const status = Fixtures.allAbsent(codebook);
+    status.patterns = status.patterns.map((hit) => ({
+      id: hit.id,
+      status: "present" as const,
+      confidence: 0.6,
+      evidence: [{ kind: "text" as const, quote: "visible" }],
+    }));
+    const dims = { hits: presentIds.map((id) => Fixtures.presentDims(codebook, id)) };
+    const dir = mkdtempSync(join(tmpdir(), "atlas-argv-"));
+    const statusPath = join(dir, "status.json");
+    const dimsPath = join(dir, "dims.json");
+    const spillPath = join(dir, "spill.log");
+    const bin = join(dir, "fake-agent.mjs");
+    writeFileSync(statusPath, JSON.stringify(status));
+    writeFileSync(dimsPath, JSON.stringify(dims));
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from "node:fs";
+const arg = process.argv.at(-1) ?? "";
+let prompt = arg;
+let spill = "";
+if (arg.includes("too large for a command argument")) {
+  spill = arg.split("\\n").map((line) => line.trim()).find((line) => line.startsWith("/")) ?? "";
+  prompt = readFileSync(spill, "utf8");
+}
+appendFileSync(process.env.SPILL_LOG, JSON.stringify({
+  argBytes: Buffer.byteLength(arg),
+  promptBytes: Buffer.byteLength(prompt),
+  spill,
+  dims: prompt.includes("code every sub-dimension"),
+}) + "\\n");
+const file = prompt.includes("code every sub-dimension") ? process.env.DIMS_JSON : process.env.STATUS_JSON;
+process.stdout.write(JSON.stringify({ type: "result", result: readFileSync(file, "utf8"), model: "grok-4.7" }));
+`,
+    );
+    chmodSync(bin, 0o755);
+    const previous = {
+      SPILL_LOG: process.env.SPILL_LOG,
+      STATUS_JSON: process.env.STATUS_JSON,
+      DIMS_JSON: process.env.DIMS_JSON,
+    };
+    process.env.SPILL_LOG = spillPath;
+    process.env.STATUS_JSON = statusPath;
+    process.env.DIMS_JSON = dimsPath;
+    try {
+      const labeled = await Labeler.label({
+        codebook,
+        screenshotPath: join(dir, "shot.png"),
+        ariaSnapshot: "- main: page",
+        url: "https://example.com/",
+        bin,
+        model: "grok-4.7",
+        timeoutMs: 15000,
+        log: () => {},
+      });
+      assert.equal(labeled.dims.hits.length, 119);
+      const lines = readFileSync(spillPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { argBytes: number; promptBytes: number; spill: string; dims: boolean });
+      assert.equal(lines.length, 2);
+      const statusPass = lines[0];
+      const dimsPass = lines[1];
+      assert.equal(statusPass?.dims, false);
+      assert.equal(statusPass?.spill, "");
+      assert.ok((statusPass?.argBytes ?? 0) <= Labeler.MAX_PROMPT_ARG_BYTES);
+      assert.equal(dimsPass?.dims, true);
+      assert.ok((dimsPass?.promptBytes ?? 0) > Labeler.MAX_PROMPT_ARG_BYTES);
+      assert.ok((dimsPass?.argBytes ?? Labeler.MAX_PROMPT_ARG_BYTES) < Labeler.MAX_PROMPT_ARG_BYTES);
+      assert.equal(existsSync(dimsPass?.spill ?? ""), false);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value == null) delete process.env[key];
+        else process.env[key] = value;
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   });
