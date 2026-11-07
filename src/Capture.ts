@@ -74,8 +74,8 @@ export class Capture {
         throw new CaptureError(`HTTP ${status} for ${url}`);
       }
 
-      await page.evaluate("document.fonts.ready");
-      const clipHeight = await Capture.clipPage(page, clipCssPx);
+      await Capture.pageScript(page, "document.fonts.ready", timeout);
+      const clipHeight = await Capture.clipPage(page, clipCssPx, timeout);
       const ariaSnapshot = await page.locator("body").ariaSnapshot();
       const buffer = await page.screenshot({
         fullPage: true,
@@ -84,7 +84,7 @@ export class Capture {
       Output.write(opts.screenshotPath, buffer);
 
       const png = Capture.pngSize(buffer);
-      const userAgent = String(await page.evaluate("navigator.userAgent"));
+      const userAgent = String(await Capture.pageScript(page, "navigator.userAgent", timeout));
       const capturedAt = new Date().toISOString();
       const screenshotRef = opts.screenshotPath;
 
@@ -310,16 +310,44 @@ export class Capture {
     );
   }
 
-  private static async clipPage(page: Page, maxCssPx: number): Promise<number> {
+  private static async pageScript<T>(
+    page: Page,
+    expression: string,
+    timeoutMs: number,
+    arg?: unknown,
+  ): Promise<T> {
+    const pending = (
+      arg === undefined ? page.evaluate(expression) : page.evaluate(expression, arg)
+    ) as Promise<T>;
+    pending.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new CaptureError(`Page script timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private static async clipPage(page: Page, maxCssPx: number, timeoutMs: number): Promise<number> {
     // String scripts: tsx/esbuild injects __name into function expressions, which
     // Playwright then serializes into the page and blows up.
     const measured = Number(
-      await page.evaluate(
+      await Capture.pageScript(
+        page,
         `(() => Math.max(document.documentElement.scrollHeight, document.body && document.body.scrollHeight || 0, 1))()`,
+        timeoutMs,
       ),
     );
     const clipHeight = Math.max(1, Math.min(measured, maxCssPx));
-    await page.evaluate(
+    await Capture.pageScript(
+      page,
       `(height) => {
         const hide = (root) => {
           for (const child of [...root.children]) {
@@ -332,6 +360,7 @@ export class Capture {
         document.documentElement.style.maxHeight = height + "px";
         document.documentElement.style.overflow = "hidden";
       }`,
+      timeoutMs,
       clipHeight,
     );
     return clipHeight;
