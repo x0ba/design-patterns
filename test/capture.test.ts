@@ -188,6 +188,37 @@ describe("Capture.fromUrl", () => {
     }
   });
 
+  it("rejects a page whose font promise never settles", { timeout: 30_000 }, async () => {
+    const site = await listen((req, res) => {
+      if (req.url === "/robots.txt") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(
+        "<!doctype html><title>Fonts</title><script>Object.defineProperty(document,'fonts',{configurable:true,value:{ready:new Promise(()=>{})}})</script><p>hang</p>",
+      );
+    });
+    const dir = mkdtempSync(join(tmpdir(), "atlas-fonts-"));
+    const screenshot = join(dir, "shot.png");
+    try {
+      await assert.rejects(
+        () =>
+          Capture.fromUrl(`http://127.0.0.1:${site.port}/`, {
+            screenshotPath: screenshot,
+            timeoutMs: 2000,
+          }),
+        (error: unknown) =>
+          error instanceof CaptureError && /Page script timed out after 2000ms/.test(error.message),
+      );
+      assert.equal(existsSync(screenshot), false);
+    } finally {
+      site.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("captures a local page once network idle is reached", { timeout: 60_000 }, async () => {
     const site = await listen((req, res) => {
       if (req.url === "/robots.txt") {
