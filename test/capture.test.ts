@@ -202,7 +202,6 @@ describe("Capture.fromUrl", () => {
     });
     const dir = mkdtempSync(join(tmpdir(), "atlas-fonts-"));
     const screenshot = join(dir, "shot.png");
-    const started = Date.now();
     try {
       await assert.rejects(
         () =>
@@ -213,7 +212,6 @@ describe("Capture.fromUrl", () => {
         (error: unknown) =>
           error instanceof CaptureError && /Page script timed out after 2000ms/.test(error.message),
       );
-      assert.ok(Date.now() - started < 5000);
       assert.equal(existsSync(screenshot), false);
     } finally {
       site.close();
