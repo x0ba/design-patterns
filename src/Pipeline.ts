@@ -621,8 +621,12 @@ export class Pipeline {
   }
 
   private static sameSet(values: Set<string>, other: string[]): boolean {
-    if (values.size !== other.length) return false;
-    return other.every((item) => values.has(item));
+    const otherValues = new Set(other);
+    if (values.size !== otherValues.size) return false;
+    for (const item of otherValues) {
+      if (!values.has(item)) return false;
+    }
+    return true;
   }
 
   private static sleep(ms: number): Promise<void> {

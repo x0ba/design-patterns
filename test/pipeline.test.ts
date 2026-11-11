@@ -82,6 +82,52 @@ describe("Pipeline.agreement", () => {
     assert.equal(written.failures[0]?.error, "boom");
   });
 
+  it("scores a repeated dimension value once", () => {
+    const codebook = Fixtures.codebook();
+    const entry = codebook.entries.find((item) => item.id === "analyze");
+    if (!entry) throw new Error("missing analyze");
+    const status = Fixtures.allAbsent(codebook);
+    status.patterns = status.patterns.map((hit) =>
+      hit.id === entry.id
+        ? {
+            id: entry.id,
+            status: "present" as const,
+            confidence: 1,
+            evidence: [{ kind: "text" as const, quote: "x" }],
+          }
+        : hit,
+    );
+    const base = Fixtures.presentDims(codebook, entry.id);
+    const record = (values: string[]) =>
+      Record.merge(
+        {
+          capture: Fixtures.capture(),
+          status,
+          dims: {
+            hits: [
+              {
+                ...base,
+                dims: base.dims.map((dim) =>
+                  dim.key === "encoding" ? { key: dim.key, values } : dim,
+                ),
+              },
+            ],
+          },
+          model: { name: "probe", version: "0" },
+        },
+        codebook,
+      );
+    const duplicated = record(["Position", "Position"]);
+    const distinct = record(["Position", "Length or size"]);
+    const same = Pipeline.agreement(duplicated, duplicated);
+    assert.equal(same.dimKeysAgree, same.dimKeysCompared);
+    const cross = Pipeline.agreement(duplicated, distinct);
+    const reverse = Pipeline.agreement(distinct, duplicated);
+    assert.equal(cross.dimKeysAgree, cross.dimKeysCompared - 1);
+    assert.equal(reverse.dimKeysAgree, reverse.dimKeysCompared - 1);
+    assert.equal(cross.dimRate, reverse.dimRate);
+  });
+
   it("primary json omits absent; .b.json and the in-memory record keep all 119", () => {
     const codebook = Fixtures.codebook();
     const presentId = codebook.entries[0]!.id;
